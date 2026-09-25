@@ -39,6 +39,11 @@ struct Shelf {
     std::vector<ShelfItem> books;
 };
 
+// Catalogue names look like "Silva, Daniel, 1960-" or "By Smith, Martin Cruz, 1942-". This returns the
+// natural spoken form ("Daniel Silva", "Martin Cruz Smith"): dates dropped, first name first. Several
+// authors separated by ';' come back joined with " and ".
+std::string natural_author(const std::string& catalogue_name);
+
 // Sets the credentials and logs in (3-step handshake). On failure `error` is a short reason.
 esp_err_t login(const std::string& user, const std::string& password, std::string* error = nullptr);
 bool logged_in();

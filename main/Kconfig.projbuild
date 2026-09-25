@@ -50,6 +50,10 @@ menu "BookBook"
         range 1 32
         default 4
 
+    config BOOKBOOK_CLAUDE_MODEL
+        string "Claude model id"
+        default "claude-sonnet-5"
+
     config BOOKBOOK_SPEAKER_VOLUME
         int "Software volume, percent of full scale"
         range 1 100

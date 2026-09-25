@@ -81,6 +81,13 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
   </fieldset>
 
   <fieldset>
+    <legend>Try the librarian</legend>
+    <label for="ask">Type a request <span class="hint">(the reply is shown here, not spoken; it can look things up in your library)</span></label>
+    <input id="ask" maxlength="300" autocomplete="off">
+    <button type="button" class="secondary" id="askbtn">Ask</button>
+  </fieldset>
+
+  <fieldset>
     <legend>This page</legend>
     <label for="admin_password">Change setup-page password <span class="hint">(user name is "admin"; leave blank to keep)</span></label>
     <input id="admin_password" name="admin_password" type="password" maxlength="64" autocomplete="new-password">
@@ -160,6 +167,16 @@ $('testmic').addEventListener('click', async () => {
     const level = r.peak < 300 ? ' Very quiet: check the microphone wiring, or the left/right setting.' : r.peak > 30000 ? ' Signal is clipping: lower the microphone gain.' : '';
     say((r.heard ? 'Heard: "' + r.heard + '". ' : 'No speech recognised (' + (r.status || 'no result') + '). ') + 'Level: rms ' + r.rms + ', peak ' + r.peak + ' of 32767.' + level, r.heard ? 'ok' : 'bad');
   } catch (e) { say('Microphone test failed: ' + e.message, 'bad'); }
+});
+
+$('askbtn').addEventListener('click', async () => {
+  const text = $('ask').value.trim();
+  if (!text) { say('Type a request first.', 'bad'); return; }
+  say('Thinking…');
+  try {
+    const r = await api('/api/test/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+    say(r.reply, r.ok ? 'ok' : 'bad');
+  } catch (e) { say('Ask failed: ' + e.message, 'bad'); }
 });
 
 $('testva').addEventListener('click', async () => {

@@ -1,9 +1,11 @@
 // Phase 0-2 bring-up: board IO, Wi-Fi, web setup page, Azure speech test.
 #include "audio.h"
+#include "brain.h"
 #include "azure.h"
 #include "board.h"
 #include "config.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "mic.h"
 #include <string>
@@ -37,81 +39,14 @@ static void say(const Config& c, const std::string& text) {
     azure::speak(c.azure_region.c_str(), c.azure_key.c_str(), text.c_str(), key_cancel);
 }
 
-// Catalogue authors look like "Silva, Daniel, 1960-": drop the dates, put the first name first.
-static std::string spoken_author(const std::string& raw) {
-    std::vector<std::string> parts;
-    size_t start = 0;
-    while (start <= raw.size()) {
-        size_t comma = raw.find(',', start);
-        std::string p = raw.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
-        while (!p.empty() && p.front() == ' ') p.erase(p.begin());
-        while (!p.empty() && p.back() == ' ') p.pop_back();
-        bool has_digit = p.find_first_of("0123456789") != std::string::npos;
-        if (!p.empty() && !has_digit) parts.push_back(p);  // dates like "1960-" or "1931-2020" contain digits
-        if (comma == std::string::npos) break;
-        start = comma + 1;
-    }
-    if (parts.size() == 2) return parts[1] + " " + parts[0];
-    std::string joined;
-    for (const auto& p : parts) joined += (joined.empty() ? "" : ", ") + p;
-    return joined;
-}
-
-static std::string plural(int n, const char* one, const char* many) {
-    return std::to_string(n) + " " + (n == 1 ? one : many);
-}
-
-// Short press: fetch the library bookshelf and read it aloud. Never speaks raw errors.
-// Returns true if playback was interrupted by a button press.
-[[maybe_unused]] static bool read_bookshelf_aloud(const Config& c) {
-    board::set_leds(0, 25, 25);  // cyan: working
-    if (!wifi::connected()) {
-        say(c, "I am not connected to the internet.");
-        return false;
-    }
-    thinking::start();  // confirmation beep, then soft chimes while we wait (Bookworm's strategy)
-    if (!va::logged_in()) {
-        std::string why;
-        if (va::login(c.va_user, c.va_password, &why) != ESP_OK) {
-            say(c, why == "no library login saved" ? "There is no library login saved yet. Please use the setup page."
-                                                   : "I could not sign in to the library.");
-            return false;
-        }
-    }
-    va::Shelf shelf;
-    if (va::bookshelf(shelf) != ESP_OK) {
-        say(c, "I could not get your bookshelf.");
-        return false;
-    }
-
-    std::string text;
-    if (shelf.books.empty()) {
-        text = "Your bookshelf is empty.";
-    } else {
-        text = "Your bookshelf has " + plural(static_cast<int>(shelf.books.size()), "book", "books") + ". ";
-        int n = 0;
-        for (const auto& b : shelf.books) {
-            std::string title = b.title;
-            while (!title.empty() && (title.back() == '.' || title.back() == ' ')) title.pop_back();
-            text += "Number " + std::to_string(++n) + ", " + title;
-            std::string who = spoken_author(b.author);
-            if (!who.empty()) text += ", by " + who;
-            text += ". ";
-        }
-    }
-    int free_slots = va::kLoanCap - shelf.loan_count;
-    if (free_slots > 0) text += "You have " + plural(free_slots, "free place", "free places") + " left.";
-    else text += "Your bookshelf is full.";
-
-    board::set_leds(0, 0, 20);
-    say(c, text);
-    return key_cancel();  // pressed during speech: caller swallows the matching release
-}
-
-// Push-to-talk turn: transcribe what was recorded and answer it. For now the answer just says back
-// what was heard (Bookworm's Phase 2 echo test); the Claude conversation replaces this.
+// Push-to-talk turn: transcribe what was recorded, ask the librarian brain (Claude with library
+// tools), and speak the answer.
 // Returns true if the user pressed the button during the answer (that press stops it).
 static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm) {
+    ESP_LOGI(TAG, "turn start: free internal heap %u (largest %u), PSRAM %u",
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
     mic::Stats stats;
     mic::process(pcm, &stats);
     ESP_LOGI(TAG, "recorded %u ms, rms %d, peak %d", static_cast<unsigned>(pcm.size() * 1000 / mic::kSampleRateHz),
@@ -127,10 +62,21 @@ static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm) {
                                         : azure::transcribe(c.azure_region.c_str(), c.azure_key.c_str(),
                                                             pcm.data(), pcm.size(), text, &status);
     ESP_LOGI(TAG, "heard: \"%s\" (%s)", text.c_str(), status.c_str());
+    if (err != ESP_OK) {
+        board::set_leds(0, 0, 20);
+        say(c, "I could not reach the speech service.");
+        return key_cancel();
+    }
+    if (text.empty()) {
+        board::set_leds(0, 0, 20);
+        say(c, "I did not hear anything I could understand.");
+        return key_cancel();
+    }
+    std::string reply;
+    brain::respond(c, text, reply);  // always yields something speakable, even on failure
+    ESP_LOGI(TAG, "reply: %s", reply.c_str());
     board::set_leds(0, 0, 20);
-    if (err != ESP_OK) say(c, "I could not reach the speech service.");
-    else if (text.empty()) say(c, "I did not hear anything I could understand.");
-    else say(c, "I heard: " + text);
+    say(c, reply);
     return key_cancel();
 }
 

@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <vector>
 #include <memory>
 #include <strings.h>
 
@@ -141,10 +142,13 @@ esp_err_t request(esp_http_client_method_t method, const std::string& path, cons
         if (body) esp_http_client_set_post_field(s_client, body->data(), static_cast<int>(body->size()));
         else esp_http_client_set_post_field(s_client, nullptr, 0);
 
+        int64_t t_start = esp_timer_get_time();
         esp_err_t err = esp_http_client_perform(s_client);
         s_last_call_us = esp_timer_get_time();
         if (err == ESP_OK) {
             out.status = esp_http_client_get_status_code(s_client);
+            ESP_LOGI(TAG, "%s %s: HTTP %d, %u bytes, %d ms", method == HTTP_METHOD_POST ? "POST" : "GET", path.substr(0, 48).c_str(),
+                     out.status, static_cast<unsigned>(out.body.size()), static_cast<int>((s_last_call_us - t_start) / 1000));
             return out.truncated ? ESP_ERR_NO_MEM : ESP_OK;
         }
         ESP_LOGW(TAG, "request %s failed: %s%s", path.c_str(), esp_err_to_name(err),
@@ -248,11 +252,29 @@ struct JsonDeleter {
 };
 using JsonPtr = std::unique_ptr<cJSON, JsonDeleter>;
 
-// "By Jane Doe" -> "Jane Doe"
-std::string clean_author(std::string a) {
-    if (a.rfind("By ", 0) == 0) a.erase(0, 3);
-    while (!a.empty() && isspace(static_cast<unsigned char>(a.back()))) a.pop_back();
-    return a;
+std::string trim(std::string s) {
+    while (!s.empty() && isspace(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+    while (!s.empty() && isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+    return s;
+}
+
+std::string one_author(std::string raw) {
+    raw = trim(raw);
+    if (raw.rfind("By ", 0) == 0) raw = trim(raw.substr(3));
+    std::vector<std::string> parts;
+    size_t start = 0;
+    while (start <= raw.size()) {
+        size_t comma = raw.find(',', start);
+        std::string p = trim(raw.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
+        // Dates such as "1960-" or "1931-2020" contain digits: drop them.
+        if (!p.empty() && p.find_first_of("0123456789") == std::string::npos) parts.push_back(p);
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    if (parts.size() == 2) return parts[1] + " " + parts[0];
+    std::string joined;
+    for (const auto& p : parts) joined += (joined.empty() ? "" : ", ") + p;
+    return joined;
 }
 
 void parse_shelf_item(const cJSON* it, va::ShelfItem& out) {
@@ -260,7 +282,7 @@ void parse_shelf_item(const cJSON* it, va::ShelfItem& out) {
     out.active_title_id = jstr(it, "activeTitleId");
     out.title = jstr(it, "title");
     if (out.title.empty()) out.title = jstr(book, "title");
-    out.author = clean_author(jstr(book, "authorBy"));
+    out.author = va::natural_author(jstr(book, "authorBy"));
     out.bookshare_id = jstr(book, "bookshareId");
     out.format = jstr(cJSON_GetObjectItemCaseSensitive(it, "format"), "name");
     out.status = jstr(cJSON_GetObjectItemCaseSensitive(it, "status"), "key");
@@ -270,6 +292,19 @@ void parse_shelf_item(const cJSON* it, va::ShelfItem& out) {
 }  // namespace
 
 namespace va {
+
+std::string natural_author(const std::string& catalogue_name) {
+    std::string out;
+    size_t start = 0;
+    while (start <= catalogue_name.size()) {
+        size_t semi = catalogue_name.find(';', start);
+        std::string one = one_author(catalogue_name.substr(start, semi == std::string::npos ? std::string::npos : semi - start));
+        if (!one.empty()) out += (out.empty() ? "" : " and ") + one;
+        if (semi == std::string::npos) break;
+        start = semi + 1;
+    }
+    return out;
+}
 
 bool logged_in() { return s_logged_in; }
 
@@ -348,8 +383,10 @@ esp_err_t search(const std::string& keyword, SearchResult& out, int limit, const
         h.title = jstr(item, "title");
         const cJSON* a;
         cJSON_ArrayForEach(a, cJSON_GetObjectItemCaseSensitive(item, "authors")) {
+            std::string who = va::natural_author(jstr(a, "displayName"));
+            if (who.empty()) continue;
             if (!h.authors.empty()) h.authors += ", ";
-            h.authors += jstr(a, "displayName");
+            h.authors += who;
         }
         h.status = jstr(cJSON_GetObjectItemCaseSensitive(item, "status"), "key");
         out.items.push_back(std::move(h));

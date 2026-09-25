@@ -7,9 +7,12 @@
 #include "cJSON.h"
 
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char* TAG = "azure";
 
@@ -147,8 +150,8 @@ esp_err_t speak(const char* region, const char* key, const char* text, bool (*ca
     return total > 0 ? err : ESP_FAIL;
 }
 
-esp_err_t transcribe(const char* region, const char* key, const int16_t* pcm, size_t samples,
-                     std::string& text, std::string* status, const char* language) {
+static esp_err_t transcribe_once(const char* region, const char* key, const int16_t* pcm, size_t samples,
+                                 std::string& text, std::string* status, const char* language) {
     text.clear();
     const uint32_t data_bytes = static_cast<uint32_t>(samples * 2);
 
@@ -191,7 +194,9 @@ esp_err_t transcribe(const char* region, const char* key, const int16_t* pcm, si
         left -= n;
     }
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "stt upload failed");
+        ESP_LOGE(TAG, "stt open/upload failed: %s (free internal heap %u, largest block %u)", esp_err_to_name(err),
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
         esp_http_client_cleanup(client);
         return err;
     }
@@ -204,7 +209,10 @@ esp_err_t transcribe(const char* region, const char* key, const int16_t* pcm, si
     esp_http_client_cleanup(client);
     ESP_LOGI(TAG, "stt: HTTP %d, %u audio bytes, %d ms", http_status, static_cast<unsigned>(data_bytes),
              static_cast<int>((esp_timer_get_time() - t0) / 1000));
-    if (http_status != 200) return ESP_FAIL;
+    if (http_status != 200) {
+        ESP_LOGE(TAG, "stt HTTP %d: %.200s", http_status, body.c_str());
+        return ESP_FAIL;
+    }
 
     cJSON* root = cJSON_ParseWithLength(body.data(), body.size());
     if (!root) return ESP_ERR_INVALID_RESPONSE;
@@ -214,6 +222,19 @@ esp_err_t transcribe(const char* region, const char* key, const int16_t* pcm, si
     if (cJSON_IsString(txt) && txt->valuestring) text = txt->valuestring;
     cJSON_Delete(root);
     return ESP_OK;
+}
+
+// One automatic retry: a dropped connection or a busy moment should not cost the member a whole
+// spoken request (weak Wi-Fi makes this more likely).
+esp_err_t transcribe(const char* region, const char* key, const int16_t* pcm, size_t samples,
+                     std::string& text, std::string* status, const char* language) {
+    esp_err_t err = transcribe_once(region, key, pcm, samples, text, status, language);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "stt failed (%s): retrying once", esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(300));
+        err = transcribe_once(region, key, pcm, samples, text, status, language);
+    }
+    return err;
 }
 
 }  // namespace azure
