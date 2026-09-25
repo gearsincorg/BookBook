@@ -106,7 +106,7 @@ async function load() {
     (c.ap ? '. Setup network: ' + c.ap : '') + '.';
 }
 
-$('volume').addEventListener('input', e => { $('volout').textContent = e.target.value; });
+$('volume').addEventListener('input', e => { $('volout').textContent = e.target.value; say('Volume changed but not saved yet. Press Test speaker to hear it, then Save.'); });
 
 $('scan').addEventListener('click', async () => {
   say('Scanning…');
@@ -134,7 +134,7 @@ $('f').addEventListener('submit', async ev => {
 
 $('testspeak').addEventListener('click', async () => {
   say('Playing test phrase…');
-  try { await api('/api/test/speak', { method: 'POST' }); say('Test phrase played.', 'ok'); }
+  try { await api('/api/test/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume: Number($('volume').value) }) }); say('Test phrase played at ' + $('volume').value + '%. Press Save to keep this volume.', 'ok'); }
   catch (e) { say('Speaker test failed: ' + e.message, 'bad'); }
 });
 

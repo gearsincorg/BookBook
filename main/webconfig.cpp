@@ -205,8 +205,22 @@ static esp_err_t h_test_speak(httpd_req_t* req) {
     if (!wifi::connected()) return send_error(req, "409 Conflict", "Not on the internet yet: save Wi-Fi and restart first");
     Config c = config::get();
     if (c.azure_key.empty()) return send_error(req, "409 Conflict", "No Azure key saved");
+
+    // Optional {"volume": N}: try that level for this test only, without saving it.
+    int test_volume = c.volume;
+    std::string body;
+    if (read_body(req, body)) {
+        std::unique_ptr<cJSON, decltype(&cJSON_Delete)> root(cJSON_Parse(body.c_str()), cJSON_Delete);
+        cJSON* vol = root ? cJSON_GetObjectItemCaseSensitive(root.get(), "volume") : nullptr;
+        if (cJSON_IsNumber(vol) && vol->valuedouble >= 1 && vol->valuedouble <= 100) {
+            test_volume = static_cast<int>(vol->valuedouble);
+        }
+    }
+    audio::set_volume(test_volume);
+    ESP_LOGI(TAG, "speaker test at volume %d%% (saved: %d%%)", test_volume, c.volume);
     esp_err_t err = azure::speak(c.azure_region.c_str(), c.azure_key.c_str(),
                                  "Testing, one, two, three. Book Book is working.");
+    audio::set_volume(c.volume);  // back to the saved level
     if (err != ESP_OK) return send_error(req, "502 Bad Gateway", "Azure speech request failed; check the key and region");
     cJSON* o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", true);

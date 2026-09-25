@@ -2,6 +2,7 @@
 
 #include "sdkconfig.h"
 
+// Slider percent -> amplitude is squared so the slider feels even in loudness (80% = -3.9 dB, 50% = -12 dB).
 static volatile int s_volume = CONFIG_BOOKBOOK_SPEAKER_VOLUME;
 namespace audio {
 void set_volume(int percent) { s_volume = percent < 1 ? 1 : (percent > 100 ? 100 : percent); }
@@ -60,7 +61,7 @@ esp_err_t write(const uint8_t* pcm, size_t len) {
         n &= ~static_cast<size_t>(1);
         const int16_t* in = reinterpret_cast<const int16_t*>(pcm);
         for (size_t i = 0; i < n / 2; i++) {
-            scaled[i] = static_cast<int16_t>((static_cast<int32_t>(in[i]) * s_volume) / 100);
+            scaled[i] = static_cast<int16_t>((static_cast<int32_t>(in[i]) * s_volume * s_volume) / 10000);
         }
         size_t written = 0;
         ESP_RETURN_ON_ERROR(i2s_channel_write(s_tx, scaled, n, &written, portMAX_DELAY), TAG, "write");
