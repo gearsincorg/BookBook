@@ -1,10 +1,12 @@
 #include "wifi.h"
 
 #include <cstring>
+#include <ctime>
 
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_netif_sntp.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -56,6 +58,18 @@ esp_err_t connect(const char* ssid, const char* password, int timeout_ms) {
 
     EventBits_t bits = xEventGroupWaitBits(s_events, kConnected, pdFALSE, pdTRUE, pdMS_TO_TICKS(timeout_ms));
     return (bits & kConnected) ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+esp_err_t sync_time(int timeout_ms) {
+    esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    esp_err_t err = esp_netif_sntp_init(&cfg);
+    if (err != ESP_OK) return err;
+    err = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(timeout_ms));
+    if (err == ESP_OK) {
+        time_t now = time(nullptr);
+        ESP_LOGI(TAG, "time synced: %s", ctime(&now));
+    }
+    return err;
 }
 
 }  // namespace wifi
