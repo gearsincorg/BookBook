@@ -22,6 +22,7 @@ static const StrField kStrFields[] = {
     {"va_user", &Config::va_user},       {"va_pass", &Config::va_password},
     {"az_key", &Config::azure_key},      {"az_region", &Config::azure_region},
     {"anth_key", &Config::anthropic_key}, {"admin_pw", &Config::admin_password},
+    {"mem_url", &Config::memory_url},
 };
 
 namespace config {

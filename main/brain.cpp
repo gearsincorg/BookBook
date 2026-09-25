@@ -12,6 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "sdkconfig.h"
+#include "memory.h"
 #include "va.h"
 
 static const char* TAG = "brain";
@@ -47,9 +48,9 @@ const char kSystemPrompt[] =
     "8. Answer only what was asked. Do not volunteer counts, free space, other shelves or summaries, and "
     "never read out status values such as READY_FOR_DOWNLOAD; a title that is on the shelf is simply there.\n"
     "9. You can search the catalogue, list the bookshelf and the request list, add a title to the bookshelf "
-    "or to the request list, and remove a title from the bookshelf. You cannot yet subscribe to periodicals, "
-    "remove from the request list, or remember preferences between sessions. If asked for one of those, say "
-    "so in one short sentence.\n"
+    "or to the request list, remove a title from the bookshelf, and remember things between sessions. You "
+    "cannot yet subscribe to periodicals or remove from the request list. If asked for one of those, say so "
+    "in one short sentence.\n"
     "10. Adding to the bookshelf or the request list needs no confirmation: just do it, then say it is done in "
     "one short sentence. Removing from the bookshelf is destructive: first say which book you would remove and "
     "ask whether to go ahead, and only call the remove tool after the member clearly says yes in their next "
@@ -57,6 +58,16 @@ const char kSystemPrompt[] =
     "11. When adding to the bookshelf, use a format from that title's formats list, preferring "
     "DAISY_Audio_Human, otherwise another audio format. If the bookshelf is full (no free slots), offer to add "
     "the title to the request list instead.\n"
+    "13. Use remember_preference whenever the member states a preference outside a normal search (favourite "
+    "genres or authors, formats, things to avoid), and recall_preferences when it would help answer. What you "
+    "already remember is listed below the rules.\n"
+    "14. After a successful add_to_bookshelf, look at its result and ask about both things in one natural "
+    "follow-up, not two questions. If authorAlreadyInPreferredAuthors is false, ask whether to note this "
+    "author as one they like, and whether a favourite, then call add_preferred_author with the answer; ask "
+    "only once per author. Using your own knowledge, name the title's likely genre; if it is not in "
+    "currentPreferredGenres, ask whether to add it, and call add_preferred_genre only if they agree.\n"
+    "15. Use search_reading_history to check whether a title was read or borrowed before (it covers every "
+    "book ever added, not just what is on the shelf), and rate_book whenever the member wants to rate a book.\n"
     "12. If a tool result says dryRun, the change was only pretended (practice mode). Tell the member it was a "
     "practice run and that nothing on their real library account changed.\n";
 
@@ -76,6 +87,7 @@ const char kToolsJson[] = R"JSON([
     "bookshareId":{"type":"string","description":"The catalogue id from a search result."},
     "format":{"type":"string","description":"A formatId from the search result's formats list, e.g. DAISY_Audio_Human."},
     "title":{"type":"string","description":"The title, from the search result."},
+    "author":{"type":"string","description":"The author, from the search result, if known."},
     "type":{"type":"string","enum":["book","music","periodical"],"description":"Defaults to book."}},
    "required":["bookshareId","format","title"]}},
  {"name":"remove_from_bookshelf",
@@ -89,6 +101,42 @@ const char kToolsJson[] = R"JSON([
   "input_schema":{"type":"object","properties":{
     "bookshareId":{"type":"string","description":"The catalogue id from a search result."}},
    "required":["bookshareId"]}},
+ {"name":"remember_preference",
+  "description":"Save a short note about something the member likes, dislikes or is looking for, so it is remembered in future sessions.",
+  "input_schema":{"type":"object","properties":{
+    "note":{"type":"string","description":"A short self-contained note, e.g. 'prefers DAISY Audio (Human)' or 'not keen on graphic violence'."}},
+   "required":["note"]}},
+ {"name":"recall_preferences",
+  "description":"Get everything remembered about the member's stated preferences and ongoing interests.",
+  "input_schema":{"type":"object","properties":{}}},
+ {"name":"search_reading_history",
+  "description":"Search the record of every title ever added to the bookshelf (including ones since removed), with dates and any rating. Use it to check whether a book was read before.",
+  "input_schema":{"type":"object","properties":{
+    "query":{"type":"string","description":"Title or author text to look for (partial match)."}},
+   "required":["query"]}},
+ {"name":"rate_book",
+  "description":"Set a 1 to 5 star rating on a title in the reading history. Can be done at any time. Search the history first if unsure of the exact title.",
+  "input_schema":{"type":"object","properties":{
+    "title":{"type":"string","description":"The title to rate (partial match is fine if unambiguous)."},
+    "rating":{"type":"integer","minimum":1,"maximum":5,"description":"1 to 5 stars."}},
+   "required":["title","rating"]}},
+ {"name":"get_preferred_authors",
+  "description":"Get the authors the member has been asked about, including which are favourites.",
+  "input_schema":{"type":"object","properties":{}}},
+ {"name":"add_preferred_author",
+  "description":"Record an author as one the member likes, and whether they are a favourite. Only call this after actually asking the member.",
+  "input_schema":{"type":"object","properties":{
+    "authorName":{"type":"string","description":"The author's name in natural order, e.g. Tom Clancy."},
+    "isFavorite":{"type":"boolean","description":"Whether the member said this is a favourite author."}},
+   "required":["authorName","isFavorite"]}},
+ {"name":"get_preferred_genres",
+  "description":"Get the genres the member has agreed to add as preferences.",
+  "input_schema":{"type":"object","properties":{}}},
+ {"name":"add_preferred_genre",
+  "description":"Record a genre as preferred. Only call this after actually asking the member.",
+  "input_schema":{"type":"object","properties":{
+    "genre":{"type":"string","description":"A short genre label, e.g. Historical Fiction."}},
+   "required":["genre"]}},
  {"name":"get_request_list",
   "description":"Get the request list: titles saved to read later, which move to the bookshelf when a loan slot frees up.",
   "input_schema":{"type":"object","properties":{}}}
@@ -304,6 +352,7 @@ std::string dry_run_result(const char* action, const std::string& title) {
 
 std::string tool_add_bookshelf(const Config& c, cJSON* input, bool* is_error) {
     std::string id = arg(input, "bookshareId"), format = arg(input, "format"), title = arg(input, "title");
+    std::string author = va::natural_author(arg(input, "author"));
     std::string type = arg(input, "type");
     if (type.empty()) type = "book";
     if (id.empty() || format.empty()) {
@@ -330,7 +379,14 @@ std::string tool_add_bookshelf(const Config& c, cJSON* input, bool* is_error) {
             return "That title is already on the bookshelf.";
         }
     }
-    if (c.dry_run) return dry_run_result("add_to_bookshelf", title);
+    // Read-only, so it is safe in practice mode too: lets the ask-about-author/genre flow be rehearsed.
+    memory::AddInfo info = memory::add_info(author);
+    if (c.dry_run) {
+        cJSON* o = cJSON_Parse(dry_run_result("add_to_bookshelf", title).c_str());
+        cJSON_AddBoolToObject(o, "authorAlreadyInPreferredAuthors", info.author_known);
+        cJSON_AddItemToObject(o, "currentPreferredGenres", cJSON_Parse(info.genres_json.c_str()));
+        return print(o);
+    }
 
     std::string reply;
     if (va::add_to_bookshelf(id, format, type, &reply) != ESP_OK) {
@@ -352,6 +408,12 @@ std::string tool_add_bookshelf(const Config& c, cJSON* input, bool* is_error) {
     cJSON_AddBoolToObject(o, "success", true);
     cJSON_AddStringToObject(o, "title", title.c_str());
     cJSON_AddNumberToObject(o, "freeSlotsNow", va::kLoanCap - after.loan_count);
+    if (memory::configured(c)) {
+        bool logged = memory::log_added(c, title, author, id) == ESP_OK;
+        cJSON_AddBoolToObject(o, "loggedToReadingHistory", logged);
+    }
+    cJSON_AddBoolToObject(o, "authorAlreadyInPreferredAuthors", info.author_known);
+    cJSON_AddItemToObject(o, "currentPreferredGenres", cJSON_Parse(info.genres_json.c_str()));
     return print(o);
 }
 
@@ -377,12 +439,13 @@ std::string tool_remove_bookshelf(const Config& c, cJSON* input, bool* is_error)
         return "Could not read the bookshelf.";
     }
     // Only remove something that is really on the shelf right now.
-    std::string title;
+    std::string title, bookshare_id;
     bool found = false;
     for (const auto& b : before.books) {
         if (b.active_title_id == active) {
             found = true;
             title = b.title;
+            bookshare_id = b.bookshare_id;
         }
     }
     if (!found) {
@@ -410,6 +473,7 @@ std::string tool_remove_bookshelf(const Config& c, cJSON* input, bool* is_error)
     cJSON_AddBoolToObject(o, "success", true);
     cJSON_AddStringToObject(o, "title", title.c_str());
     cJSON_AddNumberToObject(o, "freeSlotsNow", va::kLoanCap - after.loan_count);
+    if (memory::configured(c)) memory::log_removed(c, bookshare_id);
     return print(o);
 }
 
@@ -435,7 +499,91 @@ std::string tool_add_request_list(const Config& c, cJSON* input, bool* is_error)
     return print(o);
 }
 
+std::string memory_tool(const Config& c, const std::string& name, cJSON* input, bool* is_error) {
+    if (!memory::configured(c)) {
+        *is_error = true;
+        return "Memory storage is not set up on this device yet, so nothing can be remembered.";
+    }
+    if (!memory::loaded() && memory::load(c) != ESP_OK) {
+        *is_error = true;
+        return "Could not reach the memory storage.";
+    }
+    auto ok_or_fail = [&](esp_err_t e, const char* what) -> std::string {
+        if (e != ESP_OK) {
+            *is_error = true;
+            return std::string("Could not save ") + what + ".";
+        }
+        cJSON* o = cJSON_CreateObject();
+        cJSON_AddBoolToObject(o, "success", true);
+        return print(o);
+    };
+    if (name == "remember_preference") {
+        std::string note = arg(input, "note");
+        if (note.empty()) {
+            *is_error = true;
+            return "Missing required argument: note";
+        }
+        return ok_or_fail(memory::remember(c, note), "the note");
+    }
+    if (name == "recall_preferences") return memory::recall();
+    if (name == "search_reading_history") return memory::search_history(arg(input, "query"));
+    if (name == "get_preferred_authors") return memory::preferred_authors_json();
+    if (name == "get_preferred_genres") return memory::preferred_genres_json();
+    if (name == "add_preferred_author") {
+        std::string who = arg(input, "authorName");
+        const cJSON* fav = cJSON_GetObjectItemCaseSensitive(input, "isFavorite");
+        if (who.empty() || !cJSON_IsBool(fav)) {
+            *is_error = true;
+            return "Missing required arguments: authorName and isFavorite";
+        }
+        return ok_or_fail(memory::add_author(c, who, cJSON_IsTrue(fav)), "the author");
+    }
+    if (name == "add_preferred_genre") {
+        std::string genre = arg(input, "genre");
+        if (genre.empty()) {
+            *is_error = true;
+            return "Missing required argument: genre";
+        }
+        return ok_or_fail(memory::add_genre(c, genre), "the genre");
+    }
+    if (name == "rate_book") {
+        std::string title = arg(input, "title");
+        const cJSON* rating = cJSON_GetObjectItemCaseSensitive(input, "rating");
+        if (title.empty() || !cJSON_IsNumber(rating) || rating->valueint < 1 || rating->valueint > 5) {
+            *is_error = true;
+            return "rate_book needs a title and a rating from 1 to 5.";
+        }
+        std::string matched;
+        int matches = 0;
+        esp_err_t e = memory::rate(c, title, rating->valueint, &matched, &matches);
+        if (e == ESP_ERR_NOT_FOUND) {
+            *is_error = true;
+            return "No title in the reading history matches that. Use search_reading_history to find it.";
+        }
+        if (e == ESP_ERR_INVALID_SIZE) {
+            *is_error = true;
+            return std::to_string(matches) + " titles match that; ask the member which one, or use a longer part of the title.";
+        }
+        if (e != ESP_OK) {
+            *is_error = true;
+            return "Could not save the rating.";
+        }
+        cJSON* o = cJSON_CreateObject();
+        cJSON_AddBoolToObject(o, "success", true);
+        cJSON_AddStringToObject(o, "title", matched.c_str());
+        cJSON_AddNumberToObject(o, "rating", rating->valueint);
+        return print(o);
+    }
+    *is_error = true;
+    return "Unknown tool: " + name;
+}
+
 std::string run_tool(const Config& c, const std::string& name, cJSON* input, bool* is_error) {
+    if (name == "remember_preference" || name == "recall_preferences" || name == "search_reading_history" ||
+        name == "rate_book" || name == "get_preferred_authors" || name == "add_preferred_author" ||
+        name == "get_preferred_genres" || name == "add_preferred_genre") {
+        return memory_tool(c, name, input, is_error);
+    }
     if (name == "add_to_bookshelf") return tool_add_bookshelf(c, input, is_error);
     if (name == "remove_from_bookshelf") return tool_remove_bookshelf(c, input, is_error);
     if (name == "add_to_request_list") return tool_add_request_list(c, input, is_error);
@@ -501,6 +649,7 @@ esp_err_t respond(const Config& c, const std::string& user_text, std::string& re
     }
     init_once();
     if (!s_messages || !s_tools) return ESP_ERR_NO_MEM;
+    if (memory::configured(c) && !memory::loaded()) memory::load(c);  // usually done at startup already
 
     int64_t now = esp_timer_get_time();
     if (s_last_turn_us && now - s_last_turn_us > kIdleResetUs) rollback_to(0);  // stale conversation
@@ -515,7 +664,8 @@ esp_err_t respond(const Config& c, const std::string& user_text, std::string& re
         JsonPtr req(cJSON_CreateObject());
         cJSON_AddStringToObject(req.get(), "model", CONFIG_BOOKBOOK_CLAUDE_MODEL);
         cJSON_AddNumberToObject(req.get(), "max_tokens", 1024);
-        cJSON_AddStringToObject(req.get(), "system", kSystemPrompt);
+        std::string system = std::string(kSystemPrompt) + "\nRemembered from previous sessions:\n" + memory::prompt_snapshot();
+        cJSON_AddStringToObject(req.get(), "system", system.c_str());
         cJSON_AddItemReferenceToObject(req.get(), "messages", s_messages);  // referenced, not owned
         cJSON_AddItemReferenceToObject(req.get(), "tools", s_tools);
         char* raw = cJSON_PrintUnformatted(req.get());

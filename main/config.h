@@ -12,6 +12,7 @@ struct Config {
     std::string azure_key;
     std::string azure_region = "eastus";
     std::string anthropic_key;
+    std::string memory_url;                   // container SAS URL of memory.json (secret)
     std::string admin_password = "bookbook";  // HTTP Basic password for the LAN config page
     int volume = 80;                          // percent
     bool dry_run = true;                      // practice mode: pretend to add/remove, change nothing

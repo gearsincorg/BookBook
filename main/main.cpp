@@ -7,6 +7,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "memory.h"
 #include "mic.h"
 #include <string>
 #include <vector>
@@ -125,6 +126,13 @@ extern "C" void app_main() {
         if (!cfg.azure_key.empty()) {
             azure::speak(cfg.azure_region.c_str(), cfg.azure_key.c_str(),
                          "Hello. This is Book Book, speaking from an E S P 32.");
+        }
+        // Read the shared memory file now so the first request already knows the member's preferences.
+        if (memory::configured(cfg)) {
+            esp_err_t m = memory::load(cfg);
+            memory::Counts n = memory::counts();
+            ESP_LOGI(TAG, "memory: %s (%d preferences, %d authors, %d genres, %d books read)", esp_err_to_name(m),
+                     n.preferences, n.authors, n.genres, n.history);
         }
         // Sign in to the library now so the first button press is fast.
         if (!cfg.va_user.empty()) {

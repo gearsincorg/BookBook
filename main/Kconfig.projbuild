@@ -14,7 +14,7 @@ menu "BookBook"
 
     config BOOKBOOK_XIAO_LED_COUNT
         int "Number of WS2812 LEDs on GPIO2 (XIAO stand-in only)"
-        default 8
+        default 12
         depends on BOOKBOOK_BOARD_XIAO_ESP32S3
 
     config BOOKBOOK_I2S_BCLK

@@ -9,7 +9,8 @@
 //
 // Tools: search_library, get_bookshelf, get_request_list, add_to_bookshelf, remove_from_bookshelf,
 // add_to_request_list. Changes honour Config::dry_run (practice mode) and are verified by re-reading the
-// shelf. Memory across sessions comes later.
+// shelf. Memory tools (preferences, favourite authors and genres, reading history and ratings) read and
+// write the shared memory file (see memory.h).
 namespace brain {
 
 // Answers one spoken request. `reply` is always set to something speakable, even on failure (a short

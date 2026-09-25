@@ -36,7 +36,7 @@ Used until the Waveshare board is in hand. Selected with `CONFIG_BOOKBOOK_BOARD_
 
 | Function | XIAO pin | GPIO |
 |---|---|---|
-| WS2812 LED string (8 assumed) | D1 | 2 |
+| WS2812 LED string (12) | D1 | 2 |
 | Key1 (BOOT button, active low) | - | 0 |
 | MAX98357A BCLK / LRC / DIN / SD_MODE | D8 / D7 / D9 / D10 | 7 / 44 / 8 / 9 |
 | PDM microphone CLK | D0 | 1 |
