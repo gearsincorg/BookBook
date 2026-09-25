@@ -19,6 +19,7 @@
 #include "mbedtls/base64.h"
 #include "mdns.h"
 #include "webpage.h"
+#include "va.h"
 #include "wifi.h"
 
 static const char* TAG = "web";
@@ -227,6 +228,23 @@ static esp_err_t h_test_speak(httpd_req_t* req) {
     return send_json(req, o);
 }
 
+static esp_err_t h_test_va(httpd_req_t* req) {
+    if (!authorized(req)) return ESP_OK;
+    if (!wifi::connected()) return send_error(req, "409 Conflict", "Not on the internet yet: save Wi-Fi and restart first");
+    Config c = config::get();
+    std::string why;
+    if (va::login(c.va_user, c.va_password, &why) != ESP_OK) {
+        return send_error(req, "401 Unauthorized", ("Library login failed: " + why).c_str());
+    }
+    va::Shelf shelf;
+    if (va::bookshelf(shelf) != ESP_OK) return send_error(req, "502 Bad Gateway", "Signed in, but could not read the bookshelf");
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", true);
+    cJSON_AddNumberToObject(o, "on_shelf", static_cast<double>(shelf.books.size()));
+    cJSON_AddNumberToObject(o, "loan_count", shelf.loan_count);
+    return send_json(req, o);
+}
+
 static esp_err_t h_reboot(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
     cJSON* o = cJSON_CreateObject();
@@ -325,6 +343,7 @@ esp_err_t start(bool trust_setup_ap) {
         {"/api/config", HTTP_POST, h_post_config, nullptr},
         {"/api/scan", HTTP_GET, h_scan, nullptr},
         {"/api/test/speak", HTTP_POST, h_test_speak, nullptr},
+        {"/api/test/va", HTTP_POST, h_test_va, nullptr},
         {"/api/reboot", HTTP_POST, h_reboot, nullptr},
         {"/*", HTTP_GET, h_redirect, nullptr},  // last: captive-portal probes and unknown paths
     };

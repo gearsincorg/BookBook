@@ -8,5 +8,6 @@ esp_err_t probe_token(const char* region, const char* key);
 
 // Synthesises `text` with an Azure neural voice and streams the raw 16 kHz mono PCM straight to
 // audio::write() as it arrives. Logs time-to-first-audio and total time.
-esp_err_t speak(const char* region, const char* key, const char* text);
+// `cancel`, if given, is polled between audio chunks; returning true stops playback early.
+esp_err_t speak(const char* region, const char* key, const char* text, bool (*cancel)() = nullptr);
 }

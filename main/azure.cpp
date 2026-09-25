@@ -60,7 +60,7 @@ static void append_escaped(std::string& out, const char* text) {
     }
 }
 
-esp_err_t speak(const char* region, const char* key, const char* text) {
+esp_err_t speak(const char* region, const char* key, const char* text, bool (*cancel)()) {
     constexpr const char* kVoice = "en-AU-NatashaNeural";
     std::string ssml = "<speak version='1.0' xml:lang='en-AU'><voice name='";
     ssml += kVoice;
@@ -115,6 +115,10 @@ esp_err_t speak(const char* region, const char* key, const char* text) {
         }
         int n = esp_http_client_read(client, reinterpret_cast<char*>(buf) + off, sizeof(buf) - off);
         if (n <= 0) break;
+        if (cancel && cancel()) {
+            ESP_LOGI(TAG, "tts cancelled");
+            break;
+        }
         n += off;
         if (n & 1) {
             carry = buf[n - 1];

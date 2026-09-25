@@ -54,6 +54,7 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
     <input id="va_user" name="va_user" maxlength="80" autocapitalize="off" spellcheck="false">
     <label for="va_password">Library password <span class="hint" id="h_va_pass"></span></label>
     <input id="va_password" name="va_password" type="password" maxlength="80" autocomplete="new-password">
+    <button type="button" class="secondary" id="testva">Test library login</button>
   </fieldset>
 
   <fieldset>
@@ -148,6 +149,12 @@ $('testspeak').addEventListener('click', async () => {
   say('Playing test phrase…');
   try { await api('/api/test/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume: Number($('volume').value) }) }); say('Test phrase played at ' + $('volume').value + '%. Press Save to keep this volume.', 'ok'); }
   catch (e) { say('Speaker test failed: ' + e.message, 'bad'); }
+});
+
+$('testva').addEventListener('click', async () => {
+  say('Signing in to the library… (save first if you just changed the login)');
+  try { const r = await api('/api/test/va', { method: 'POST' }); say('Library login works. ' + r.on_shelf + ' books on your bookshelf.', 'ok'); }
+  catch (e) { say(e.message, 'bad'); }
 });
 
 $('reboot').addEventListener('click', async () => {

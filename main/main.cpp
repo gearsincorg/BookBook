@@ -5,6 +5,10 @@
 #include "config.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include <string>
+#include <vector>
+#include "thinking.h"
+#include "va.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "webconfig.h"
@@ -20,6 +24,87 @@ static void show_idle_state() {
     } else {
         board::set_leds(20, 10, 0);  // amber: connecting
     }
+}
+
+// Polled by the speech player so a button press stops a long reading.
+static bool key_cancel() { return board::key_pressed(board::Key::Key1); }
+
+static void say(const Config& c, const std::string& text) {
+    thinking::stop();  // the real answer is ready: waiting sounds end immediately
+    if (c.azure_key.empty()) return;
+    ESP_LOGI(TAG, "say: %s", text.c_str());
+    azure::speak(c.azure_region.c_str(), c.azure_key.c_str(), text.c_str(), key_cancel);
+}
+
+// Catalogue authors look like "Silva, Daniel, 1960-": drop the dates, put the first name first.
+static std::string spoken_author(const std::string& raw) {
+    std::vector<std::string> parts;
+    size_t start = 0;
+    while (start <= raw.size()) {
+        size_t comma = raw.find(',', start);
+        std::string p = raw.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        while (!p.empty() && p.front() == ' ') p.erase(p.begin());
+        while (!p.empty() && p.back() == ' ') p.pop_back();
+        bool has_digit = p.find_first_of("0123456789") != std::string::npos;
+        if (!p.empty() && !has_digit) parts.push_back(p);  // dates like "1960-" or "1931-2020" contain digits
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    if (parts.size() == 2) return parts[1] + " " + parts[0];
+    std::string joined;
+    for (const auto& p : parts) joined += (joined.empty() ? "" : ", ") + p;
+    return joined;
+}
+
+static std::string plural(int n, const char* one, const char* many) {
+    return std::to_string(n) + " " + (n == 1 ? one : many);
+}
+
+// Short press: fetch the library bookshelf and read it aloud. Never speaks raw errors.
+// Returns true if playback was interrupted by a button press.
+static bool read_bookshelf_aloud(const Config& c) {
+    board::set_leds(0, 25, 25);  // cyan: working
+    if (!wifi::connected()) {
+        say(c, "I am not connected to the internet.");
+        return false;
+    }
+    thinking::start();  // confirmation beep, then soft chimes while we wait (Bookworm's strategy)
+    if (!va::logged_in()) {
+        std::string why;
+        if (va::login(c.va_user, c.va_password, &why) != ESP_OK) {
+            say(c, why == "no library login saved" ? "There is no library login saved yet. Please use the setup page."
+                                                   : "I could not sign in to the library.");
+            return false;
+        }
+    }
+    va::Shelf shelf;
+    if (va::bookshelf(shelf) != ESP_OK) {
+        say(c, "I could not get your bookshelf.");
+        return false;
+    }
+
+    std::string text;
+    if (shelf.books.empty()) {
+        text = "Your bookshelf is empty.";
+    } else {
+        text = "Your bookshelf has " + plural(static_cast<int>(shelf.books.size()), "book", "books") + ". ";
+        int n = 0;
+        for (const auto& b : shelf.books) {
+            std::string title = b.title;
+            while (!title.empty() && (title.back() == '.' || title.back() == ' ')) title.pop_back();
+            text += "Number " + std::to_string(++n) + ", " + title;
+            std::string who = spoken_author(b.author);
+            if (!who.empty()) text += ", by " + who;
+            text += ". ";
+        }
+    }
+    int free_slots = va::kLoanCap - shelf.loan_count;
+    if (free_slots > 0) text += "You have " + plural(free_slots, "free place", "free places") + " left.";
+    else text += "Your bookshelf is full.";
+
+    board::set_leds(0, 0, 20);
+    say(c, text);
+    return key_cancel();  // pressed during speech: caller swallows the matching release
 }
 
 extern "C" void app_main() {
@@ -65,12 +150,19 @@ extern "C" void app_main() {
             azure::speak(cfg.azure_region.c_str(), cfg.azure_key.c_str(),
                          "Hello. This is Book Book, speaking from an E S P 32.");
         }
+        // Sign in to the library now so the first button press is fast.
+        if (!cfg.va_user.empty()) {
+            std::string why;
+            ESP_LOGI(TAG, "library sign-in at startup: %s",
+                     esp_err_to_name(va::login(cfg.va_user, cfg.va_password, &why)));
+        }
     }
     show_idle_state();
 
     constexpr int kSetupHoldMs = 5000;
     bool was_down = false;
     bool setup_triggered = false;
+    bool ignore_release = false;  // a press that only cancelled a reading must not start another
     int64_t down_since_ms = 0;
     bool last_online = wifi::connected();
     while (true) {
@@ -91,10 +183,11 @@ extern "C" void app_main() {
             board::set_leds(25, 0, 25);  // purple
         } else if (!down && was_down) {
             ESP_LOGI(TAG, "Key1 up");
-            Config c = config::get();
-            if (!setup_triggered && wifi::connected() && !c.azure_key.empty()) {
-                azure::speak(c.azure_region.c_str(), c.azure_key.c_str(),
-                             "You pressed the button. I can hear you, well, feel you.");
+            if (ignore_release) {
+                ignore_release = false;  // this release ends the press that cancelled a reading
+            } else if (!setup_triggered) {
+                Config c = config::get();
+                if (read_bookshelf_aloud(c)) ignore_release = true;
             }
             show_idle_state();
         }

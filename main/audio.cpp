@@ -21,6 +21,8 @@ static const char* TAG = "audio";
 namespace audio {
 
 static i2s_chan_handle_t s_tx;
+// DMA ring: 8 descriptors x 480 frames x 2 bytes (see init()); one extra descriptor for margin.
+constexpr size_t kRingBytes = 9 * 480 * 2;
 constexpr gpio_num_t kSdMode = static_cast<gpio_num_t>(CONFIG_BOOKBOOK_I2S_SD_MODE);
 
 esp_err_t init() {
@@ -47,9 +49,13 @@ esp_err_t init() {
     return i2s_channel_init_std_mode(s_tx, &std_cfg);
 }
 
+static bool s_active;
+
 esp_err_t begin() {
+    if (s_active) return ESP_OK;
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_tx), TAG, "enable");
     gpio_set_level(kSdMode, 1);  // >1.4V on the Adafruit breakout = left channel, matches mono slot
+    s_active = true;
     return ESP_OK;
 }
 
@@ -72,8 +78,14 @@ esp_err_t write(const uint8_t* pcm, size_t len) {
 }
 
 void end() {
-    // Let the DMA ring drain, then stop the clock so the last samples don't loop as a buzz.
-    vTaskDelay(pdMS_TO_TICKS(150));
+    if (!s_active) return;
+    s_active = false;
+    // Overwrite the whole DMA ring with silence. Writing blocks until the sound still queued has
+    // played, so the tail is not cut off, and afterwards no stale samples remain to be replayed
+    // at the start of the next playback (they used to play first: a fragment of the last answer).
+    static const uint8_t kSilence[kRingBytes] = {};
+    size_t written = 0;
+    i2s_channel_write(s_tx, kSilence, sizeof(kSilence), &written, pdMS_TO_TICKS(1000));
     gpio_set_level(kSdMode, 0);
     i2s_channel_disable(s_tx);
 }
