@@ -1,0 +1,8 @@
+menu "BookBook"
+    config BOOKBOOK_WIFI_SSID
+        string "Wi-Fi SSID (development only)"
+        default ""
+    config BOOKBOOK_WIFI_PASSWORD
+        string "Wi-Fi password (development only)"
+        default ""
+endmenu

@@ -1,0 +1,10 @@
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+dependencies.lock
+secrets/
+*.nvs.bin
+.vscode/
+.cache/
+reference/
