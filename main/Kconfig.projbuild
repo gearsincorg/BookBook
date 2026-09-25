@@ -1,4 +1,22 @@
 menu "BookBook"
+    choice BOOKBOOK_BOARD
+        prompt "Target board"
+        default BOOKBOOK_BOARD_WAVESHARE_AUDIO
+        help
+            Waveshare board is the real target. XIAO is a temporary development stand-in
+            (user LED on GPIO21 as a single on/off light, BOOT button on GPIO0 as Key1).
+
+        config BOOKBOOK_BOARD_WAVESHARE_AUDIO
+            bool "Waveshare ESP32-S3-AUDIO-Board"
+        config BOOKBOOK_BOARD_XIAO_ESP32S3
+            bool "Seeed XIAO ESP32-S3 (temporary dev stand-in)"
+    endchoice
+
+    config BOOKBOOK_XIAO_LED_COUNT
+        int "Number of WS2812 LEDs on GPIO2 (XIAO stand-in only)"
+        default 8
+        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
+
     config BOOKBOOK_WIFI_SSID
         string "Wi-Fi SSID (development only)"
         default ""

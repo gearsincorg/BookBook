@@ -9,7 +9,9 @@
 static const char* TAG = "bookbook";
 
 extern "C" void app_main() {
-    ESP_ERROR_CHECK(board::init());
+    if (board::init() != ESP_OK) {
+        ESP_LOGW(TAG, "board init incomplete (not a Waveshare audio board?); continuing");
+    }
 
     // LED colour-order check: expect red, green, blue in turn.
     board::set_leds(40, 0, 0);
