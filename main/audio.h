@@ -10,6 +10,7 @@ namespace audio {
 constexpr int kSampleRateHz = 16000;
 
 esp_err_t init();
+void set_volume(int percent);                        // 1-100, takes effect immediately
 esp_err_t begin();                                   // enable the amp and I2S clock
 esp_err_t write(const uint8_t* pcm, size_t len);     // blocking; applies software volume
 void end();                                          // flush and mute the amp
