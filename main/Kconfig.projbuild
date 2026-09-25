@@ -38,6 +38,13 @@ menu "BookBook"
         range 1 100
         default 80
 
+    config BOOKBOOK_SETUP_AP_PASSWORD
+        string "Password of the BookBook-XXXX setup Wi-Fi network (8-63 characters)"
+        default "bookbook1"
+        help
+            Anyone who knows this can join the setup network. Override it in the git-ignored
+            secrets/sdkconfig.secrets rather than committing a real value.
+
     config BOOKBOOK_WIFI_SSID
         string "Wi-Fi SSID (development only)"
         default ""

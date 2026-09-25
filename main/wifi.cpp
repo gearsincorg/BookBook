@@ -13,9 +13,10 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "sdkconfig.h"
 
 static const char* TAG = "wifi";
-static constexpr const char* kApPassword = "bookbook1";
+static constexpr const char* kApPassword = CONFIG_BOOKBOOK_SETUP_AP_PASSWORD;
 
 static EventGroupHandle_t s_events;
 constexpr int kConnected = BIT0;
@@ -110,7 +111,7 @@ esp_err_t enable_ap() {
     snprintf(name, sizeof(name), "BookBook-%02X%02X", mac[4], mac[5]);
     s_ap_ssid = name;
     s_ap_enabled = true;
-    ESP_LOGI(TAG, "setup AP \"%s\" (password %s)", name, kApPassword);
+    ESP_LOGI(TAG, "setup AP \"%s\" up", name);
     return apply();
 }
 

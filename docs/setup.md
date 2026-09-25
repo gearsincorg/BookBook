@@ -5,7 +5,7 @@ All settings are entered on a web page served by the device itself. They are sto
 ## First-time setup (no Wi-Fi saved yet)
 
 1. Power the device. After the start-up light sequence it shows **purple**: it is running its own Wi-Fi network.
-2. On a phone or PC, join the Wi-Fi network **BookBook-XXXX** (XXXX = the last four characters of the device's MAC address). Password: **bookbook1**.
+2. On a phone or PC, join the Wi-Fi network **BookBook-XXXX** (XXXX = the last four characters of the device's MAC address). Password: the value of `CONFIG_BOOKBOOK_SETUP_AP_PASSWORD` (default `bookbook1`; override it in your git-ignored `secrets/sdkconfig.secrets`).
 3. A setup page should open automatically. If not, browse to **http://192.168.4.1/**.
 4. Press **Scan for networks**, pick your Wi-Fi, enter its password, fill in the library, Azure and Claude details, and press **Save**, then **Restart device**.
 5. The light goes **blue** when the device is online.
@@ -20,7 +20,9 @@ Note: this page is plain HTTP on your home network, so anyone on that network wh
 
 ## Forcing setup mode
 
-Hold **Key1** (XIAO stand-in: the BOOT button) while the device powers up or is reset. It skips your saved Wi-Fi and starts the setup network instead, and the setup network is again trusted without the admin password. Saved settings are not erased.
+While the device is running, **hold Key1 for 5 seconds** (XIAO stand-in: the BOOT button). The light turns **purple** and the BookBook-XXXX setup network starts (your saved Wi-Fi stays connected). Clients on the setup network are then trusted without the admin password, because pressing the button proves physical access. Saved settings are not erased. Restart the device to close the setup network again.
+
+Do **not** hold the button while powering up or resetting the XIAO stand-in: BOOT is a strapping pin, and holding it at reset puts the chip into firmware-download mode instead of running the app.
 
 ## If Wi-Fi fails
 
@@ -28,6 +30,6 @@ If the saved network cannot be joined within 20 seconds, the device also starts 
 
 ## Known limitations
 
-- The setup-network password and the initial admin password are the same on every device and are public in this repository. Fine for bench use; make them per-device before giving a unit to anyone.
+- The setup-network password and the initial admin password are the same on every device (the setup-network one is a build setting, the admin one a fixed default). Fine for bench use; make them per-device before giving a unit to anyone.
 - Settings travel over unencrypted HTTP (setup network is WPA2-encrypted; your LAN is only as private as your Wi-Fi).
 - Developer defaults in `secrets/sdkconfig.secrets` are used until something is saved through the page, and saved values then win.

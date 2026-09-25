@@ -17,7 +17,7 @@ esp_err_t init();  // netif, event loop, Wi-Fi driver (once)
 // retrying in the background afterwards. Keeps the setup AP if one is already enabled.
 esp_err_t start_sta(const char* ssid, const char* password, int timeout_ms);
 
-// Adds the WPA2 setup access point "BookBook-XXXX" (password in docs/setup.md). Runs alongside the station.
+// Adds the WPA2 setup access point "BookBook-XXXX" (password: CONFIG_BOOKBOOK_SETUP_AP_PASSWORD). Runs alongside the station.
 esp_err_t enable_ap();
 
 bool connected();

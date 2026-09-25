@@ -290,6 +290,8 @@ static void dns_task(void*) {
 
 namespace webconfig {
 
+void set_trust_setup_ap(bool trust) { s_trust_ap = trust; }
+
 void start_captive_dns() {
     if (s_dns_running) return;
     s_dns_running = true;

@@ -3,6 +3,7 @@
 #include "azure.h"
 #include "board.h"
 #include "config.h"
+#include "esp_timer.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -40,16 +41,15 @@ extern "C" void app_main() {
     vTaskDelay(pdMS_TO_TICKS(400));
     board::set_leds(20, 10, 0);
 
-    // Holding Key1 at power-up forces setup mode (own Wi-Fi network + setup page).
-    bool force_setup = board::key_pressed(board::Key::Key1);
+    // Note: Key1 cannot be checked at boot on the XIAO stand-in (BOOT is GPIO0, a strapping pin:
+    // holding it at reset enters the ROM downloader). Setup mode is a 5 s hold while running.
     bool have_wifi = !cfg.wifi_ssid.empty();
-    if (force_setup) ESP_LOGI(TAG, "Key1 held at boot: setup mode");
 
     ESP_ERROR_CHECK(wifi::init());
-    webconfig::start(/*trust_setup_ap=*/force_setup || !have_wifi);
+    webconfig::start(/*trust_setup_ap=*/!have_wifi);
 
     bool online = false;
-    if (have_wifi && !force_setup) {
+    if (have_wifi) {
         online = wifi::start_sta(cfg.wifi_ssid.c_str(), cfg.wifi_password.c_str(), 20000) == ESP_OK;
         ESP_LOGI(TAG, "wifi: %s", online ? "connected" : "failed, starting setup network");
     }
@@ -68,21 +68,37 @@ extern "C" void app_main() {
     }
     show_idle_state();
 
+    constexpr int kSetupHoldMs = 5000;
     bool was_down = false;
+    bool setup_triggered = false;
+    int64_t down_since_ms = 0;
     bool last_online = wifi::connected();
     while (true) {
         bool down = board::key_pressed(board::Key::Key1);
-        if (down != was_down) {
-            ESP_LOGI(TAG, "Key1 %s", down ? "down" : "up");
-            board::set_leds(0, down ? 60 : 0, 0);
+        int64_t now_ms = esp_timer_get_time() / 1000;
+        if (down && !was_down) {
+            ESP_LOGI(TAG, "Key1 down");
+            board::set_leds(0, 60, 0);
+            down_since_ms = now_ms;
+            setup_triggered = false;
+        } else if (down && !setup_triggered && now_ms - down_since_ms >= kSetupHoldMs) {
+            // Long hold: bring up the setup network (station keeps running) and trust its clients.
+            setup_triggered = true;
+            ESP_LOGI(TAG, "Key1 held %d ms: starting setup network", kSetupHoldMs);
+            wifi::enable_ap();
+            webconfig::set_trust_setup_ap(true);
+            webconfig::start_captive_dns();
+            board::set_leds(25, 0, 25);  // purple
+        } else if (!down && was_down) {
+            ESP_LOGI(TAG, "Key1 up");
             Config c = config::get();
-            if (down && wifi::connected() && !c.azure_key.empty()) {
+            if (!setup_triggered && wifi::connected() && !c.azure_key.empty()) {
                 azure::speak(c.azure_region.c_str(), c.azure_key.c_str(),
                              "You pressed the button. I can hear you, well, feel you.");
             }
-            if (!down) show_idle_state();
-            was_down = down;
+            show_idle_state();
         }
+        was_down = down;
         if (!down && wifi::connected() != last_online) {
             last_online = wifi::connected();
             show_idle_state();
