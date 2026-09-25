@@ -40,6 +40,7 @@ std::map<std::string, std::string> s_cookies;
 std::string s_user, s_password;
 bool s_logged_in;
 int64_t s_last_call_us;
+bool s_xhr;  // send X-Requested-With: XMLHttpRequest (what the site's own AJAX calls send)
 
 struct Lock {
     static SemaphoreHandle_t handle() {
@@ -139,6 +140,8 @@ esp_err_t request(esp_http_client_method_t method, const std::string& path, cons
         else esp_http_client_delete_header(s_client, "Content-Type");
         if (csrf) esp_http_client_set_header(s_client, "X-CSRF-Token", csrf);
         else esp_http_client_delete_header(s_client, "X-CSRF-Token");
+        if (s_xhr) esp_http_client_set_header(s_client, "X-Requested-With", "XMLHttpRequest");
+        else esp_http_client_delete_header(s_client, "X-Requested-With");
         if (body) esp_http_client_set_post_field(s_client, body->data(), static_cast<int>(body->size()));
         else esp_http_client_set_post_field(s_client, nullptr, 0);
 
@@ -229,7 +232,8 @@ esp_err_t call_json(esp_http_client_method_t method, const std::string& path, co
         esp_err_t err = request(method, path, content_type, body, nullptr, r);
         if (err != ESP_OK) return err;
         if ((r.status >= 300 && r.status < 400) || !is_json(r)) {
-            ESP_LOGW(TAG, "%s: HTTP %d, not JSON: session expired?", path.c_str(), r.status);
+            ESP_LOGW(TAG, "%s: HTTP %d, content-type '%s', not JSON (session expired?): %.160s", path.c_str(), r.status,
+                     r.content_type.c_str(), r.body.c_str());
             s_logged_in = false;
             if (attempt == 0 && !s_user.empty()) {
                 std::string why;
@@ -238,7 +242,7 @@ esp_err_t call_json(esp_http_client_method_t method, const std::string& path, co
             return ESP_ERR_INVALID_STATE;
         }
         if (r.status != 200) {
-            ESP_LOGW(TAG, "%s: HTTP %d", path.c_str(), r.status);
+            ESP_LOGW(TAG, "%s: HTTP %d: %.160s", path.c_str(), r.status, r.body.c_str());
             return ESP_FAIL;
         }
         *root = cJSON_ParseWithLength(r.body.data(), r.body.size());
@@ -389,6 +393,11 @@ esp_err_t search(const std::string& keyword, SearchResult& out, int limit, const
             h.authors += who;
         }
         h.status = jstr(cJSON_GetObjectItemCaseSensitive(item, "status"), "key");
+        const cJSON* f;
+        cJSON_ArrayForEach(f, cJSON_GetObjectItemCaseSensitive(item, "formats")) {
+            std::string id = jstr(f, "formatId");
+            if (!id.empty()) h.formats.push_back(id);
+        }
         out.items.push_back(std::move(h));
     }
     return ESP_OK;
@@ -413,6 +422,67 @@ esp_err_t bookshelf(Shelf& out) {
         out.books.push_back(std::move(s));
     }
     return ESP_OK;
+}
+
+namespace {
+std::string safe_type(const std::string& t) { return (t == "music" || t == "periodical") ? t : "book"; }
+
+// Ids and formats go into a URL path: keep only characters that cannot change its meaning.
+std::string safe_segment(const std::string& s) {
+    std::string o;
+    for (char c : s) if (isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' || c == '.') o += c;
+    return o;
+}
+
+// The portal answers with JSON; keep a short readable version for logs and the tool result.
+esp_err_t write_call(esp_http_client_method_t method, const std::string& path, const char* content_type,
+                     const std::string* body, std::string* reply) {
+    std::string empty;
+    if (method == HTTP_METHOD_POST && !body) body = &empty;
+    cJSON* raw = nullptr;
+    s_xhr = true;
+    esp_err_t err = call_json(method, path, content_type, body, &raw);
+    s_xhr = false;
+    if (err != ESP_OK) return err;
+    JsonPtr root(raw);
+    char* s = cJSON_PrintUnformatted(root.get());
+    std::string text = s ? s : "";
+    cJSON_free(s);
+    if (text.size() > 300) text.resize(300);
+    ESP_LOGI(TAG, "%s -> %s", path.c_str(), text.c_str());
+    if (reply) *reply = text;
+    return ESP_OK;
+}
+}  // namespace
+
+esp_err_t add_to_bookshelf(const std::string& bookshare_id, const std::string& format, const std::string& type,
+                           std::string* reply) {
+    Lock lock;
+    std::string id = safe_segment(bookshare_id), fmt = safe_segment(format);
+    if (id.empty() || fmt.empty()) return ESP_ERR_INVALID_ARG;
+    return write_call(HTTP_METHOD_GET, "/library/my-bookshelf/add/" + id + "/" + fmt + "?type=" + safe_type(type), nullptr,
+                      nullptr, reply);
+}
+
+// The site's bookshelf page removes a book with its checkbox + "Remove Selected" button, which POSTs
+// /library/my-bookshelf/remove/all with book_active_title_ids=<activeTitleId> (form-encoded, one request
+// per ticked book). The per-item GET /library/my-bookshelf/remove/{type}/{id} that Bookworm traced is
+// only used for magazine issues, so it does not work for books. (my-bookshelf-tab.js, 2026-09.)
+esp_err_t remove_from_bookshelf(const std::string& active_title_id, const std::string& type, std::string* reply) {
+    Lock lock;
+    if (type != "book") return ESP_ERR_NOT_SUPPORTED;  // music and periodicals use other calls: not verified
+    std::string id = safe_segment(active_title_id);
+    if (id.empty()) return ESP_ERR_INVALID_ARG;
+    std::string body = "book_active_title_ids=" + id;
+    return write_call(HTTP_METHOD_POST, "/library/my-bookshelf/remove/all", "application/x-www-form-urlencoded; charset=UTF-8",
+                      &body, reply);
+}
+
+esp_err_t add_to_request_list(const std::string& bookshare_id, std::string* reply) {
+    Lock lock;
+    std::string id = safe_segment(bookshare_id);
+    if (id.empty()) return ESP_ERR_INVALID_ARG;
+    return write_call(HTTP_METHOD_POST, "/library/request-list/add/" + id, nullptr, nullptr, reply);
 }
 
 esp_err_t request_list(std::vector<ShelfItem>& out, int* total) {

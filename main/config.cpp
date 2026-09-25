@@ -57,6 +57,8 @@ void load() {
         }
         int32_t vol;
         if (nvs_get_i32(h, "volume", &vol) == ESP_OK) cfg.volume = vol;
+        int32_t dry;
+        if (nvs_get_i32(h, "dry_run", &dry) == ESP_OK) cfg.dry_run = dry != 0;
         nvs_close(h);
     }
 
@@ -81,6 +83,7 @@ esp_err_t save(const Config& cfg) {
         if (err != ESP_OK) break;
     }
     if (err == ESP_OK) err = nvs_set_i32(h, "volume", cfg.volume);
+    if (err == ESP_OK) err = nvs_set_i32(h, "dry_run", cfg.dry_run ? 1 : 0);
     if (err == ESP_OK) err = nvs_commit(h);
     nvs_close(h);
     if (err != ESP_OK) return err;

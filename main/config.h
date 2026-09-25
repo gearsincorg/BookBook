@@ -14,6 +14,7 @@ struct Config {
     std::string anthropic_key;
     std::string admin_password = "bookbook";  // HTTP Basic password for the LAN config page
     int volume = 80;                          // percent
+    bool dry_run = true;                      // practice mode: pretend to add/remove, change nothing
 };
 
 namespace config {

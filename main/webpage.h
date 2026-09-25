@@ -69,6 +69,7 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
     <legend>Assistant (Claude)</legend>
     <label for="anthropic_key">Anthropic API key <span class="hint" id="h_anthropic_key"></span></label>
     <input id="anthropic_key" name="anthropic_key" type="password" maxlength="160" autocomplete="new-password">
+    <label for="dry_run"><input id="dry_run" name="dry_run" type="checkbox" style="width:auto"> Practice mode: pretend to add and remove books, and change nothing on my real library account</label>
   </fieldset>
 
   <fieldset>
@@ -112,7 +113,7 @@ function hint(id, has) { $(id).textContent = has ? '(saved; leave blank to keep)
 async function load() {
   const c = await api('/api/config');
   $('wifi_ssid').value = c.wifi_ssid; $('va_user').value = c.va_user;
-  $('azure_region').value = c.azure_region; $('volume').value = c.volume; $('volout').textContent = c.volume;
+  $('azure_region').value = c.azure_region; $('volume').value = c.volume; $('volout').textContent = c.volume; $('dry_run').checked = c.dry_run;
   hint('h_wifi_pass', c.has.wifi_password); hint('h_va_pass', c.has.va_password);
   hint('h_azure_key', c.has.azure_key); hint('h_anthropic_key', c.has.anthropic_key);
   $('info').textContent = 'Device ' + c.mac + (c.ip ? ' on your network at ' + c.ip : ' (not on your network yet)') +
@@ -144,7 +145,7 @@ $('scan').addEventListener('click', async () => {
 $('f').addEventListener('submit', async ev => {
   ev.preventDefault();
   const body = {};
-  for (const el of $('f').elements) if (el.name) body[el.name] = el.type === 'range' ? Number(el.value) : el.value;
+  for (const el of $('f').elements) if (el.name) body[el.name] = el.type === 'range' ? Number(el.value) : el.type === 'checkbox' ? el.checked : el.value;
   say('Saving…');
   try {
     const r = await api('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

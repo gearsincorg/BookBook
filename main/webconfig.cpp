@@ -113,6 +113,7 @@ static esp_err_t h_get_config(httpd_req_t* req) {
     cJSON_AddStringToObject(o, "va_user", c.va_user.c_str());
     cJSON_AddStringToObject(o, "azure_region", c.azure_region.c_str());
     cJSON_AddNumberToObject(o, "volume", c.volume);
+    cJSON_AddBoolToObject(o, "dry_run", c.dry_run);
     cJSON* has = cJSON_AddObjectToObject(o, "has");  // secrets are never sent back, only whether set
     cJSON_AddBoolToObject(has, "wifi_password", !c.wifi_password.empty());
     cJSON_AddBoolToObject(has, "va_password", !c.va_password.empty());
@@ -173,6 +174,8 @@ static esp_err_t h_post_config(httpd_req_t* req) {
         if (v < 1 || v > 100) return send_error(req, "400 Bad Request", "Volume must be 1 to 100");
         c.volume = v;
     }
+    cJSON* dry = cJSON_GetObjectItemCaseSensitive(root.get(), "dry_run");
+    if (cJSON_IsBool(dry)) c.dry_run = cJSON_IsTrue(dry);
     if (!c.wifi_password.empty() && c.wifi_password.size() < 8) {
         return send_error(req, "400 Bad Request", "Wi-Fi password must be at least 8 characters");
     }

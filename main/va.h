@@ -13,6 +13,7 @@ constexpr int kLoanCap = 20;  // books + music + braille on the bookshelf
 
 struct BookHit {
     std::string bookshare_id;  // catalogue id: use for add-to-bookshelf / request-list
+    std::vector<std::string> formats;  // formatIds, e.g. DAISY_Audio_Human
     std::string title;
     std::string authors;
     std::string status;  // e.g. READY_FOR_DOWNLOAD
@@ -51,6 +52,16 @@ bool logged_in();
 // `type` is the portal's own dropdown value: "Book", "Picture Book", "Magazine", ...
 esp_err_t search(const std::string& keyword, SearchResult& out, int limit = 20, const char* type = "Book");
 esp_err_t bookshelf(Shelf& out);
+
+// Write operations (they change the real account). `type` is "book", "music" or "periodical" (anything
+// else is treated as "book"). `reply` receives the portal's short answer for logging. Adding is verified
+// live. Removal only supports books (POST .../remove/all, as the site's Remove Selected button does).
+// Callers should still re-read the shelf afterwards to confirm the change really happened.
+esp_err_t add_to_bookshelf(const std::string& bookshare_id, const std::string& format, const std::string& type,
+                           std::string* reply = nullptr);
+esp_err_t remove_from_bookshelf(const std::string& active_title_id, const std::string& type,
+                                std::string* reply = nullptr);
+esp_err_t add_to_request_list(const std::string& bookshare_id, std::string* reply = nullptr);
 esp_err_t request_list(std::vector<ShelfItem>& out, int* total = nullptr);
 
 }  // namespace va

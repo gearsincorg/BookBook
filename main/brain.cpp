@@ -46,9 +46,19 @@ const char kSystemPrompt[] =
     "names.\n"
     "8. Answer only what was asked. Do not volunteer counts, free space, other shelves or summaries, and "
     "never read out status values such as READY_FOR_DOWNLOAD; a title that is on the shelf is simply there.\n"
-    "9. You can currently only look things up: search the catalogue, list the bookshelf, and list the "
-    "request list. You cannot yet add or remove books, subscribe, or remember preferences. If asked to, say "
-    "so in one short sentence.\n";
+    "9. You can search the catalogue, list the bookshelf and the request list, add a title to the bookshelf "
+    "or to the request list, and remove a title from the bookshelf. You cannot yet subscribe to periodicals, "
+    "remove from the request list, or remember preferences between sessions. If asked for one of those, say "
+    "so in one short sentence.\n"
+    "10. Adding to the bookshelf or the request list needs no confirmation: just do it, then say it is done in "
+    "one short sentence. Removing from the bookshelf is destructive: first say which book you would remove and "
+    "ask whether to go ahead, and only call the remove tool after the member clearly says yes in their next "
+    "message.\n"
+    "11. When adding to the bookshelf, use a format from that title's formats list, preferring "
+    "DAISY_Audio_Human, otherwise another audio format. If the bookshelf is full (no free slots), offer to add "
+    "the title to the request list instead.\n"
+    "12. If a tool result says dryRun, the change was only pretended (practice mode). Tell the member it was a "
+    "practice run and that nothing on their real library account changed.\n";
 
 const char kToolsJson[] = R"JSON([
  {"name":"search_library",
@@ -60,6 +70,25 @@ const char kToolsJson[] = R"JSON([
  {"name":"get_bookshelf",
   "description":"Get the current bookshelf: everything on loan, including how many of the 20 book/music loan slots are used.",
   "input_schema":{"type":"object","properties":{}}},
+ {"name":"add_to_bookshelf",
+  "description":"Add a title to the bookshelf (borrows it; uses one of the 20 loan slots). Do this straight away when asked, no confirmation needed. Use the bookshareId and a formatId from that title's search result.",
+  "input_schema":{"type":"object","properties":{
+    "bookshareId":{"type":"string","description":"The catalogue id from a search result."},
+    "format":{"type":"string","description":"A formatId from the search result's formats list, e.g. DAISY_Audio_Human."},
+    "title":{"type":"string","description":"The title, from the search result."},
+    "type":{"type":"string","enum":["book","music","periodical"],"description":"Defaults to book."}},
+   "required":["bookshareId","format","title"]}},
+ {"name":"remove_from_bookshelf",
+  "description":"Remove a title from the bookshelf, freeing a loan slot. Destructive: always say which title you would remove and get an explicit yes from the member in a prior message before calling this.",
+  "input_schema":{"type":"object","properties":{
+    "activeTitleId":{"type":"string","description":"The activeTitleId from get_bookshelf (not the bookshareId)."},
+    "type":{"type":"string","enum":["book","music","periodical"],"description":"Defaults to book."}},
+   "required":["activeTitleId"]}},
+ {"name":"add_to_request_list",
+  "description":"Add a title to the request list (no loan limit). Do this straight away when asked, no confirmation needed.",
+  "input_schema":{"type":"object","properties":{
+    "bookshareId":{"type":"string","description":"The catalogue id from a search result."}},
+   "required":["bookshareId"]}},
  {"name":"get_request_list",
   "description":"Get the request list: titles saved to read later, which move to the bookshelf when a loan slot frees up.",
   "input_schema":{"type":"object","properties":{}}}
@@ -201,7 +230,8 @@ std::string tool_search(const Config& c, cJSON* input, bool* is_error) {
             cJSON* t = cJSON_CreateObject();
             cJSON_AddStringToObject(t, "title", h->title.c_str());
             cJSON_AddStringToObject(t, "bookshareId", h->bookshare_id.c_str());
-            cJSON_AddStringToObject(t, "status", h->status.c_str());
+            cJSON* fm = cJSON_AddArrayToObject(t, "formats");
+            for (const auto& f : h->formats) cJSON_AddItemToArray(fm, cJSON_CreateString(f.c_str()));
             cJSON_AddItemToArray(titles, t);
         }
         cJSON_AddItemToArray(by, go);
@@ -257,7 +287,158 @@ std::string tool_request_list(const Config& c, bool* is_error) {
     return print(o);
 }
 
+std::string arg(cJSON* input, const char* key) {
+    const cJSON* v = cJSON_GetObjectItemCaseSensitive(input, key);
+    return cJSON_IsString(v) && v->valuestring ? v->valuestring : "";
+}
+
+// Result for practice mode: nothing was sent to the library.
+std::string dry_run_result(const char* action, const std::string& title) {
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "dryRun", true);
+    cJSON_AddStringToObject(o, "action", action);
+    cJSON_AddStringToObject(o, "title", title.c_str());
+    cJSON_AddStringToObject(o, "note", "Practice mode: nothing was changed on the real library account.");
+    return print(o);
+}
+
+std::string tool_add_bookshelf(const Config& c, cJSON* input, bool* is_error) {
+    std::string id = arg(input, "bookshareId"), format = arg(input, "format"), title = arg(input, "title");
+    std::string type = arg(input, "type");
+    if (type.empty()) type = "book";
+    if (id.empty() || format.empty()) {
+        *is_error = true;
+        return "Missing required argument: bookshareId and format are both needed.";
+    }
+    if (ensure_login(c) != ESP_OK) {
+        *is_error = true;
+        return "Could not sign in to the library.";
+    }
+    va::Shelf before;
+    if (va::bookshelf(before) != ESP_OK) {
+        *is_error = true;
+        return "Could not read the bookshelf.";
+    }
+    // Check the 20-slot cap ourselves rather than letting the portal reject it silently.
+    if (type != "periodical" && before.loan_count >= va::kLoanCap) {
+        *is_error = true;
+        return "The bookshelf is full (20 of 20 loan slots used). Offer to add it to the request list instead.";
+    }
+    for (const auto& b : before.books) {
+        if (b.bookshare_id == id) {
+            *is_error = true;
+            return "That title is already on the bookshelf.";
+        }
+    }
+    if (c.dry_run) return dry_run_result("add_to_bookshelf", title);
+
+    std::string reply;
+    if (va::add_to_bookshelf(id, format, type, &reply) != ESP_OK) {
+        *is_error = true;
+        return "The library did not accept that request.";
+    }
+    // Confirm by re-reading the shelf instead of trusting the response.
+    va::Shelf after;
+    bool present = false;
+    if (va::bookshelf(after) == ESP_OK) {
+        for (const auto& b : after.books) if (b.bookshare_id == id) present = true;
+    }
+    if (!present) {
+        ESP_LOGW(TAG, "add: title not found on shelf afterwards (portal said: %s)", reply.c_str());
+        *is_error = true;
+        return "The library accepted the request but the title did not appear on the bookshelf. Tell the member it may not have worked.";
+    }
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "success", true);
+    cJSON_AddStringToObject(o, "title", title.c_str());
+    cJSON_AddNumberToObject(o, "freeSlotsNow", va::kLoanCap - after.loan_count);
+    return print(o);
+}
+
+std::string tool_remove_bookshelf(const Config& c, cJSON* input, bool* is_error) {
+    std::string active = arg(input, "activeTitleId");
+    std::string type = arg(input, "type");
+    if (type.empty()) type = "book";
+    if (type != "book") {
+        *is_error = true;
+        return "Only books can be removed for now, not music or periodical issues.";
+    }
+    if (active.empty()) {
+        *is_error = true;
+        return "Missing required argument: activeTitleId";
+    }
+    if (ensure_login(c) != ESP_OK) {
+        *is_error = true;
+        return "Could not sign in to the library.";
+    }
+    va::Shelf before;
+    if (va::bookshelf(before) != ESP_OK) {
+        *is_error = true;
+        return "Could not read the bookshelf.";
+    }
+    // Only remove something that is really on the shelf right now.
+    std::string title;
+    bool found = false;
+    for (const auto& b : before.books) {
+        if (b.active_title_id == active) {
+            found = true;
+            title = b.title;
+        }
+    }
+    if (!found) {
+        *is_error = true;
+        return "That activeTitleId is not on the bookshelf. Call get_bookshelf and use an id from it.";
+    }
+    if (c.dry_run) return dry_run_result("remove_from_bookshelf", title);
+
+    std::string reply;
+    if (va::remove_from_bookshelf(active, type, &reply) != ESP_OK) {
+        *is_error = true;
+        return "The library did not accept that request.";
+    }
+    va::Shelf after;
+    bool still_there = false;
+    if (va::bookshelf(after) == ESP_OK) {
+        for (const auto& b : after.books) if (b.active_title_id == active) still_there = true;
+    }
+    if (still_there) {
+        ESP_LOGW(TAG, "remove: title still on shelf afterwards (portal said: %s)", reply.c_str());
+        *is_error = true;
+        return "The library accepted the request but the title is still on the bookshelf. Tell the member the removal did not work.";
+    }
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "success", true);
+    cJSON_AddStringToObject(o, "title", title.c_str());
+    cJSON_AddNumberToObject(o, "freeSlotsNow", va::kLoanCap - after.loan_count);
+    return print(o);
+}
+
+std::string tool_add_request_list(const Config& c, cJSON* input, bool* is_error) {
+    std::string id = arg(input, "bookshareId");
+    if (id.empty()) {
+        *is_error = true;
+        return "Missing required argument: bookshareId";
+    }
+    if (ensure_login(c) != ESP_OK) {
+        *is_error = true;
+        return "Could not sign in to the library.";
+    }
+    if (c.dry_run) return dry_run_result("add_to_request_list", id);
+    std::string reply;
+    if (va::add_to_request_list(id, &reply) != ESP_OK) {
+        *is_error = true;
+        return "The library did not accept that request.";
+    }
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "success", true);
+    cJSON_AddStringToObject(o, "bookshareId", id.c_str());
+    return print(o);
+}
+
 std::string run_tool(const Config& c, const std::string& name, cJSON* input, bool* is_error) {
+    if (name == "add_to_bookshelf") return tool_add_bookshelf(c, input, is_error);
+    if (name == "remove_from_bookshelf") return tool_remove_bookshelf(c, input, is_error);
+    if (name == "add_to_request_list") return tool_add_request_list(c, input, is_error);
     if (name == "search_library") return tool_search(c, input, is_error);
     if (name == "get_bookshelf") return tool_bookshelf(c, is_error);
     if (name == "get_request_list") return tool_request_list(c, is_error);

@@ -7,8 +7,9 @@
 // LibrarianOrchestrator (turn loop: user text -> Claude -> run any tool calls -> feed results back ->
 // repeat, capped at 5 round trips) and its persona rules.
 //
-// Tools today (read-only): search_library, get_bookshelf, get_request_list. Adding/removing books and
-// memory come later.
+// Tools: search_library, get_bookshelf, get_request_list, add_to_bookshelf, remove_from_bookshelf,
+// add_to_request_list. Changes honour Config::dry_run (practice mode) and are verified by re-reading the
+// shelf. Memory across sessions comes later.
 namespace brain {
 
 // Answers one spoken request. `reply` is always set to something speakable, even on failure (a short
