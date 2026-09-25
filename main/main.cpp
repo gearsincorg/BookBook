@@ -63,7 +63,7 @@ static std::string plural(int n, const char* one, const char* many) {
 
 // Short press: fetch the library bookshelf and read it aloud. Never speaks raw errors.
 // Returns true if playback was interrupted by a button press.
-static bool read_bookshelf_aloud(const Config& c) {
+[[maybe_unused]] static bool read_bookshelf_aloud(const Config& c) {
     board::set_leds(0, 25, 25);  // cyan: working
     if (!wifi::connected()) {
         say(c, "I am not connected to the internet.");
@@ -108,6 +108,32 @@ static bool read_bookshelf_aloud(const Config& c) {
     return key_cancel();  // pressed during speech: caller swallows the matching release
 }
 
+// Push-to-talk turn: transcribe what was recorded and answer it. For now the answer just says back
+// what was heard (Bookworm's Phase 2 echo test); the Claude conversation replaces this.
+// Returns true if the user pressed the button during the answer (that press stops it).
+static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm) {
+    mic::Stats stats;
+    mic::process(pcm, &stats);
+    ESP_LOGI(TAG, "recorded %u ms, rms %d, peak %d", static_cast<unsigned>(pcm.size() * 1000 / mic::kSampleRateHz),
+             stats.rms, stats.peak);
+    board::set_leds(0, 25, 25);  // cyan: working
+    if (!wifi::connected()) {
+        say(c, "I am not connected to the internet.");
+        return false;
+    }
+    thinking::start();  // confirmation beep, then soft chimes until the answer is ready
+    std::string text, status;
+    esp_err_t err = c.azure_key.empty() ? ESP_ERR_INVALID_STATE
+                                        : azure::transcribe(c.azure_region.c_str(), c.azure_key.c_str(),
+                                                            pcm.data(), pcm.size(), text, &status);
+    ESP_LOGI(TAG, "heard: \"%s\" (%s)", text.c_str(), status.c_str());
+    board::set_leds(0, 0, 20);
+    if (err != ESP_OK) say(c, "I could not reach the speech service.");
+    else if (text.empty()) say(c, "I did not hear anything I could understand.");
+    else say(c, "I heard: " + text);
+    return key_cancel();
+}
+
 extern "C" void app_main() {
     config::load();
     Config cfg = config::get();
@@ -129,8 +155,9 @@ extern "C" void app_main() {
     vTaskDelay(pdMS_TO_TICKS(400));
     board::set_leds(20, 10, 0);
 
-    // Note: Key1 cannot be checked at boot on the XIAO stand-in (BOOT is GPIO0, a strapping pin:
-    // holding it at reset enters the ROM downloader). Setup mode is a 5 s hold while running.
+    // Note: Key1 cannot be used at boot on the XIAO stand-in (BOOT is GPIO0, a strapping pin:
+    // holding it at reset enters the ROM downloader). Setup is reached over the normal Wi-Fi
+    // (http://bookbook.local/); the setup network starts by itself when Wi-Fi is missing or fails.
     bool have_wifi = !cfg.wifi_ssid.empty();
 
     ESP_ERROR_CHECK(wifi::init());
@@ -162,12 +189,17 @@ extern "C" void app_main() {
     }
     show_idle_state();
 
-    constexpr int kSetupHoldMs = 5000;
+    // Button: push-to-talk. Recording runs while it is held (up to 15 s); on release the recording is
+    // transcribed and answered. A press shorter than kMinTalkMs is a bump, not speech: ignored.
+    constexpr int kMinTalkMs = 400;
+    constexpr int kMaxTalkMs = 15000;
     bool was_down = false;
-    bool setup_triggered = false;
-    bool ignore_release = false;  // a press that only cancelled a reading must not start another
+    bool ignore_release = false;  // a press that only cancelled a reading/answer, or an over-long talk
+    bool talk_ended = false;
     int64_t down_since_ms = 0;
     bool last_online = wifi::connected();
+    std::vector<int16_t> pcm;
+    pcm.reserve(static_cast<size_t>(mic::kSampleRateHz) * kMaxTalkMs / 1000);
     while (true) {
         bool down = board::key_pressed(board::Key::Key1);
         int64_t now_ms = esp_timer_get_time() / 1000;
@@ -175,22 +207,28 @@ extern "C" void app_main() {
             ESP_LOGI(TAG, "Key1 down");
             board::set_leds(0, 60, 0);
             down_since_ms = now_ms;
-            setup_triggered = false;
-        } else if (down && !setup_triggered && now_ms - down_since_ms >= kSetupHoldMs) {
-            // Long hold: bring up the setup network (station keeps running) and trust its clients.
-            setup_triggered = true;
-            ESP_LOGI(TAG, "Key1 held %d ms: starting setup network", kSetupHoldMs);
-            wifi::enable_ap();
-            webconfig::set_trust_setup_ap(true);
-            webconfig::start_captive_dns();
-            board::set_leds(25, 0, 25);  // purple
-        } else if (!down && was_down) {
-            ESP_LOGI(TAG, "Key1 up");
-            if (ignore_release) {
-                ignore_release = false;  // this release ends the press that cancelled a reading
-            } else if (!setup_triggered) {
+            talk_ended = false;
+            pcm.clear();
+            if (!ignore_release) mic::start();  // a cancelling press must not record
+        } else if (down && !talk_ended && !ignore_release) {
+            mic::read(pcm, 20);
+            if (now_ms - down_since_ms >= kMaxTalkMs) {
+                // Too long: answer what we have now; the eventual release is then ignored.
+                ESP_LOGI(TAG, "talk limit reached");
+                talk_ended = true;
+                mic::stop();
                 Config c = config::get();
-                if (read_bookshelf_aloud(c)) ignore_release = true;
+                handle_utterance(c, pcm);
+                ignore_release = true;
+            }
+        } else if (!down && was_down) {
+            ESP_LOGI(TAG, "Key1 up after %d ms", static_cast<int>(now_ms - down_since_ms));
+            mic::stop();
+            if (ignore_release) {
+                ignore_release = false;  // this release ends a press that must not act
+            } else if (!talk_ended && now_ms - down_since_ms >= kMinTalkMs) {
+                Config c = config::get();
+                if (handle_utterance(c, pcm)) ignore_release = true;
             }
             show_idle_state();
         }

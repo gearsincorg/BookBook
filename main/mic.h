@@ -17,6 +17,14 @@ struct Stats {
 
 esp_err_t init();
 
+// Streaming capture, for push-to-talk: start() when the button goes down, read() repeatedly while it
+// is held (appends whatever has arrived, waiting up to timeout_ms), stop() on release, then
+// process() the whole recording once (DC offset removal + gain).
+esp_err_t start();
+esp_err_t read(std::vector<int16_t>& out, int timeout_ms);
+void stop();
+void process(std::vector<int16_t>& pcm, Stats* stats = nullptr);
+
 // Records `ms` milliseconds (after discarding ~150 ms of start-up noise), removes DC offset and
 // applies the configured gain. Blocks for the duration.
 esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats = nullptr);

@@ -45,36 +45,47 @@ esp_err_t init() {
     return ESP_OK;
 }
 
-esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats) {
-    out.clear();
+static bool s_running;
+static size_t s_skip;  // samples still to drop: start-up transient and mic settling
+
+esp_err_t start() {
+    if (s_running) return ESP_OK;
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_rx), TAG, "enable");
+    s_skip = kSampleRateHz * 150 / 1000;
+    s_running = true;
+    return ESP_OK;
+}
 
-    const size_t want = static_cast<size_t>(kSampleRateHz) * ms / 1000;
-    const size_t discard = kSampleRateHz * 150 / 1000;  // start-up transient and mic settling
-    out.resize(want + discard);
-    size_t got_samples = 0;
-    esp_err_t err = ESP_OK;
-    while (got_samples < out.size()) {
-        size_t bytes = 0;
-        size_t chunk = std::min<size_t>(out.size() - got_samples, 512) * sizeof(int16_t);
-        err = i2s_channel_read(s_rx, out.data() + got_samples, chunk, &bytes, pdMS_TO_TICKS(1000));
-        if (err != ESP_OK) break;
-        got_samples += bytes / sizeof(int16_t);
-    }
+esp_err_t read(std::vector<int16_t>& out, int timeout_ms) {
+    if (!s_running) return ESP_ERR_INVALID_STATE;
+    int16_t buf[320];  // 20 ms
+    size_t bytes = 0;
+    esp_err_t err = i2s_channel_read(s_rx, buf, sizeof(buf), &bytes, pdMS_TO_TICKS(timeout_ms));
+    if (err == ESP_ERR_TIMEOUT) return ESP_OK;  // nothing ready yet
+    if (err != ESP_OK) return err;
+    size_t n = bytes / sizeof(int16_t);
+    size_t off = std::min(s_skip, n);
+    s_skip -= off;
+    out.insert(out.end(), buf + off, buf + n);
+    return ESP_OK;
+}
+
+void stop() {
+    if (!s_running) return;
     i2s_channel_disable(s_rx);
-    if (err != ESP_OK) {
-        out.clear();
-        return err;
-    }
-    out.erase(out.begin(), out.begin() + discard);
+    s_running = false;
+}
 
-    // Remove DC offset (PDM mics have one), then apply gain with clipping.
+// Remove DC offset (PDM mics have one), then apply gain with clipping.
+void process(std::vector<int16_t>& pcm, Stats* stats) {
+    if (stats) *stats = Stats();
+    if (pcm.empty()) return;
     double mean = 0;
-    for (int16_t s : out) mean += s;
-    mean /= out.size();
+    for (int16_t s : pcm) mean += s;
+    mean /= pcm.size();
     double sq = 0;
     int peak = 0;
-    for (auto& s : out) {
+    for (auto& s : pcm) {
         int v = static_cast<int>((s - mean) * CONFIG_BOOKBOOK_MIC_GAIN);
         v = std::max(-32768, std::min(32767, v));
         s = static_cast<int16_t>(v);
@@ -82,9 +93,24 @@ esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats) {
         peak = std::max(peak, std::abs(v));
     }
     if (stats) {
-        stats->rms = static_cast<int>(std::sqrt(sq / out.size()));
+        stats->rms = static_cast<int>(std::sqrt(sq / pcm.size()));
         stats->peak = peak;
     }
+}
+
+esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats) {
+    out.clear();
+    ESP_RETURN_ON_ERROR(start(), TAG, "start");
+    const size_t want = static_cast<size_t>(kSampleRateHz) * ms / 1000;
+    esp_err_t err = ESP_OK;
+    while (out.size() < want && err == ESP_OK) err = read(out, 1000);
+    stop();
+    if (err != ESP_OK) {
+        out.clear();
+        return err;
+    }
+    out.resize(want);
+    process(out, stats);
     return ESP_OK;
 }
 
@@ -94,6 +120,10 @@ esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats) {
 
 namespace mic {
 esp_err_t init() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t start() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t read(std::vector<int16_t>&, int) { return ESP_ERR_NOT_SUPPORTED; }
+void stop() {}
+void process(std::vector<int16_t>&, Stats*) {}
 esp_err_t record(std::vector<int16_t>&, int, Stats*) { return ESP_ERR_NOT_SUPPORTED; }
 }  // namespace mic
 

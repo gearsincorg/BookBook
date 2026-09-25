@@ -18,11 +18,14 @@ Browse to **http://bookbook.local/** (or the IP address the device logs at start
 
 Note: this page is plain HTTP on your home network, so anyone on that network who knows the password can read and change the settings. Saved secrets are never sent back to the page (it only shows whether each is set).
 
-## Forcing setup mode
+## The button
 
-While the device is running, **hold Key1 for 5 seconds** (XIAO stand-in: the BOOT button). The light turns **purple** and the BookBook-XXXX setup network starts (your saved Wi-Fi stays connected). Clients on the setup network are then trusted without the admin password, because pressing the button proves physical access. Saved settings are not erased. Restart the device to close the setup network again.
+- **Hold**: push-to-talk. Speak while holding (up to 15 s), release, and it answers. Press again while it is answering to stop it.
+- A very quick tap (under 0.4 s) is ignored.
 
-Do **not** hold the button while powering up or resetting the XIAO stand-in: BOOT is a strapping pin, and holding it at reset puts the chip into firmware-download mode instead of running the app.
+There is currently no button gesture for setup mode (it was removed to free the button for talking). Use the setup page over your normal Wi-Fi. The BookBook-XXXX setup network still starts by itself when no Wi-Fi is saved or the saved one cannot be joined.
+
+Do **not** hold BOOT while powering up or resetting the XIAO stand-in: it is a strapping pin, and holding it at reset puts the chip into firmware-download mode instead of running the app.
 
 ## If Wi-Fi fails
 
