@@ -5,6 +5,7 @@
 #include "config.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "mic.h"
 #include <string>
 #include <vector>
 #include "thinking.h"
@@ -114,6 +115,8 @@ extern "C" void app_main() {
     if (board::init() != ESP_OK) {
         ESP_LOGW(TAG, "board init incomplete (not a Waveshare audio board?); continuing");
     }
+    // Microphone first: PDM receive needs I2S0 (the speaker is pinned to I2S1 either way).
+    if (mic::init() != ESP_OK) ESP_LOGW(TAG, "microphone unavailable");
     if (audio::init() != ESP_OK) ESP_LOGW(TAG, "audio output unavailable");
     audio::set_volume(cfg.volume);
 

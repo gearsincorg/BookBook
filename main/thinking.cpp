@@ -96,6 +96,14 @@ void start() {
     xTaskCreate(task, "thinking", 6144, nullptr, 4, &s_task);
 }
 
+void beep() {
+    if (s_task) return;
+    s_stop = false;
+    if (audio::begin() != ESP_OK) return;
+    tone(880.0f, 120);
+    audio::end();
+}
+
 void stop() {
     if (!s_task) return;
     s_stop = true;

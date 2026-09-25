@@ -32,7 +32,7 @@ esp_err_t init() {
     ESP_RETURN_ON_ERROR(gpio_config(&sd), TAG, "sd pin");
     gpio_set_level(kSdMode, 0);  // amp shut down
 
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);  // I2S0 is reserved for the PDM mic
     chan_cfg.dma_desc_num = 8;     // 8 x 480 frames = 240 ms of cushion against network jitter
     chan_cfg.dma_frame_num = 480;
     chan_cfg.auto_clear = true;    // underrun plays silence, not a repeating buzz

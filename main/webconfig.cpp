@@ -19,6 +19,8 @@
 #include "mbedtls/base64.h"
 #include "mdns.h"
 #include "webpage.h"
+#include "mic.h"
+#include "thinking.h"
 #include "va.h"
 #include "wifi.h"
 
@@ -245,6 +247,44 @@ static esp_err_t h_test_va(httpd_req_t* req) {
     return send_json(req, o);
 }
 
+// Bring-up test for the microphone chain: beep, record 4 s, play it back (so you can judge level
+// and clarity by ear), transcribe it with Azure, and say what was heard.
+static esp_err_t h_test_mic(httpd_req_t* req) {
+    if (!authorized(req)) return ESP_OK;
+    if (!wifi::connected()) return send_error(req, "409 Conflict", "Not on the internet yet: save Wi-Fi and restart first");
+    Config c = config::get();
+    if (c.azure_key.empty()) return send_error(req, "409 Conflict", "No Azure key saved");
+
+    constexpr int kRecordMs = 4000;
+    thinking::beep();  // "speak now"
+    std::vector<int16_t> pcm;
+    mic::Stats stats;
+    if (mic::record(pcm, kRecordMs, &stats) != ESP_OK) {
+        return send_error(req, "503 Service Unavailable", "Microphone not available");
+    }
+    ESP_LOGI(TAG, "mic test: %u samples, rms %d, peak %d", static_cast<unsigned>(pcm.size()), stats.rms, stats.peak);
+
+    if (audio::begin() == ESP_OK) {  // play back exactly what was captured
+        audio::write(reinterpret_cast<const uint8_t*>(pcm.data()), pcm.size() * sizeof(int16_t));
+        audio::end();
+    }
+
+    std::string text, status;
+    esp_err_t err = azure::transcribe(c.azure_region.c_str(), c.azure_key.c_str(), pcm.data(), pcm.size(), text, &status);
+    std::string reply = err != ESP_OK ? "I could not reach the speech service."
+                        : text.empty() ? "I did not hear anything I could understand."
+                                       : "I heard: " + text;
+    azure::speak(c.azure_region.c_str(), c.azure_key.c_str(), reply.c_str());
+
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", err == ESP_OK);
+    cJSON_AddStringToObject(o, "heard", text.c_str());
+    cJSON_AddStringToObject(o, "status", status.c_str());
+    cJSON_AddNumberToObject(o, "rms", stats.rms);
+    cJSON_AddNumberToObject(o, "peak", stats.peak);
+    return send_json(req, o);
+}
+
 static esp_err_t h_reboot(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
     cJSON* o = cJSON_CreateObject();
@@ -344,6 +384,7 @@ esp_err_t start(bool trust_setup_ap) {
         {"/api/scan", HTTP_GET, h_scan, nullptr},
         {"/api/test/speak", HTTP_POST, h_test_speak, nullptr},
         {"/api/test/va", HTTP_POST, h_test_va, nullptr},
+        {"/api/test/mic", HTTP_POST, h_test_mic, nullptr},
         {"/api/reboot", HTTP_POST, h_reboot, nullptr},
         {"/*", HTTP_GET, h_redirect, nullptr},  // last: captive-portal probes and unknown paths
     };

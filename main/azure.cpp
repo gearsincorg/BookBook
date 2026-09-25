@@ -4,6 +4,7 @@
 #include <string>
 
 #include "audio.h"
+#include "cJSON.h"
 
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
@@ -144,6 +145,75 @@ esp_err_t speak(const char* region, const char* key, const char* text, bool (*ca
              static_cast<int>((esp_timer_get_time() - t0) / 1000));
     esp_http_client_cleanup(client);
     return total > 0 ? err : ESP_FAIL;
+}
+
+esp_err_t transcribe(const char* region, const char* key, const int16_t* pcm, size_t samples,
+                     std::string& text, std::string* status, const char* language) {
+    text.clear();
+    const uint32_t data_bytes = static_cast<uint32_t>(samples * 2);
+
+    // Minimal 44-byte WAV header: PCM, mono, 16 kHz, 16-bit.
+    uint8_t wav[44] = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0,
+                       0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 16, 0, 'd', 'a', 't', 'a', 0, 0, 0, 0};
+    auto put32 = [&](int at, uint32_t v) {
+        for (int i = 0; i < 4; i++) wav[at + i] = static_cast<uint8_t>(v >> (8 * i));
+    };
+    put32(4, 36 + data_bytes);
+    put32(24, audio::kSampleRateHz);
+    put32(28, audio::kSampleRateHz * 2);
+    put32(40, data_bytes);
+
+    char url[192];
+    snprintf(url, sizeof(url),
+             "https://%s.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=%s&format=simple",
+             region, language);
+    esp_http_client_config_t cfg = {};
+    cfg.url = url;
+    cfg.method = HTTP_METHOD_POST;
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    cfg.timeout_ms = 20000;
+    cfg.buffer_size = 2048;
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) return ESP_FAIL;
+    esp_http_client_set_header(client, "Ocp-Apim-Subscription-Key", key);
+    esp_http_client_set_header(client, "Content-Type", "audio/wav; codecs=audio/pcm; samplerate=16000");
+    esp_http_client_set_header(client, "Accept", "application/json");
+
+    int64_t t0 = esp_timer_get_time();
+    esp_err_t err = esp_http_client_open(client, static_cast<int>(sizeof(wav) + data_bytes));
+    if (err == ESP_OK && esp_http_client_write(client, reinterpret_cast<const char*>(wav), sizeof(wav)) < 0) err = ESP_FAIL;
+    const char* p = reinterpret_cast<const char*>(pcm);
+    size_t left = data_bytes;
+    while (err == ESP_OK && left > 0) {
+        int n = static_cast<int>(left < 4096 ? left : 4096);
+        if (esp_http_client_write(client, p, n) < 0) err = ESP_FAIL;
+        p += n;
+        left -= n;
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "stt upload failed");
+        esp_http_client_cleanup(client);
+        return err;
+    }
+    esp_http_client_fetch_headers(client);
+    int http_status = esp_http_client_get_status_code(client);
+    std::string body;
+    char buf[512];
+    int n;
+    while ((n = esp_http_client_read(client, buf, sizeof(buf))) > 0 && body.size() < 8192) body.append(buf, n);
+    esp_http_client_cleanup(client);
+    ESP_LOGI(TAG, "stt: HTTP %d, %u audio bytes, %d ms", http_status, static_cast<unsigned>(data_bytes),
+             static_cast<int>((esp_timer_get_time() - t0) / 1000));
+    if (http_status != 200) return ESP_FAIL;
+
+    cJSON* root = cJSON_ParseWithLength(body.data(), body.size());
+    if (!root) return ESP_ERR_INVALID_RESPONSE;
+    cJSON* st = cJSON_GetObjectItemCaseSensitive(root, "RecognitionStatus");
+    cJSON* txt = cJSON_GetObjectItemCaseSensitive(root, "DisplayText");
+    if (status && cJSON_IsString(st)) *status = st->valuestring;
+    if (cJSON_IsString(txt) && txt->valuestring) text = txt->valuestring;
+    cJSON_Delete(root);
+    return ESP_OK;
 }
 
 }  // namespace azure

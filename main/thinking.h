@@ -7,5 +7,6 @@ namespace thinking {
 
 void start();  // beep, then chimes until stop(); returns immediately
 void stop();   // stops within ~20 ms and releases the speaker; safe to call when not running
+void beep();   // one short blocking beep ("speak now"); does nothing while start() is running
 
 }  // namespace thinking

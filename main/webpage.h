@@ -76,6 +76,8 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
     <label for="volume">Speaker volume: <span id="volout">80</span>%</label>
     <input id="volume" name="volume" type="range" min="1" max="100" step="1">
     <button type="button" class="secondary" id="testspeak">Test speaker</button>
+    <button type="button" class="secondary" id="testmic">Test microphone</button>
+    <span class="hint">Speak a sentence after the beep (4 seconds). It plays back what it recorded, then says what it heard.</span>
   </fieldset>
 
   <fieldset>
@@ -149,6 +151,15 @@ $('testspeak').addEventListener('click', async () => {
   say('Playing test phrase…');
   try { await api('/api/test/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume: Number($('volume').value) }) }); say('Test phrase played at ' + $('volume').value + '%. Press Save to keep this volume.', 'ok'); }
   catch (e) { say('Speaker test failed: ' + e.message, 'bad'); }
+});
+
+$('testmic').addEventListener('click', async () => {
+  say('Listening for 4 seconds after the beep…');
+  try {
+    const r = await api('/api/test/mic', { method: 'POST' });
+    const level = r.peak < 300 ? ' Very quiet: check the microphone wiring, or the left/right setting.' : r.peak > 30000 ? ' Signal is clipping: lower the microphone gain.' : '';
+    say((r.heard ? 'Heard: "' + r.heard + '". ' : 'No speech recognised (' + (r.status || 'no result') + '). ') + 'Level: rms ' + r.rms + ', peak ' + r.peak + ' of 32767.' + level, r.heard ? 'ok' : 'bad');
+  } catch (e) { say('Microphone test failed: ' + e.message, 'bad'); }
 });
 
 $('testva').addEventListener('click', async () => {
