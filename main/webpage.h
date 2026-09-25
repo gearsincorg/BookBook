@@ -38,9 +38,12 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
   <fieldset>
     <legend>Wi-Fi</legend>
     <button type="button" class="secondary" id="scan">Scan for networks</button>
-    <label for="wifi_ssid">Network name (SSID)</label>
-    <input id="wifi_ssid" name="wifi_ssid" list="nets" maxlength="32" autocapitalize="off" spellcheck="false">
-    <datalist id="nets"></datalist>
+    <div id="netbox" hidden>
+      <label for="netpick">Networks found <span class="hint">(choosing one fills in the network name below)</span></label>
+      <select id="netpick"></select>
+    </div>
+    <label for="wifi_ssid">Network name (SSID) <span class="hint">(type it here if it is hidden)</span></label>
+    <input id="wifi_ssid" name="wifi_ssid" maxlength="32" autocapitalize="off" spellcheck="false">
     <label for="wifi_password">Wi-Fi password <span class="hint" id="h_wifi_pass"></span></label>
     <input id="wifi_password" name="wifi_password" type="password" maxlength="63" autocomplete="new-password">
   </fieldset>
@@ -108,14 +111,23 @@ async function load() {
 
 $('volume').addEventListener('input', e => { $('volout').textContent = e.target.value; say('Volume changed but not saved yet. Press Test speaker to hear it, then Save.'); });
 
+$('netpick').addEventListener('change', e => { if (e.target.value) { $('wifi_ssid').value = e.target.value; $('wifi_password').value = ''; $('wifi_password').focus(); } });
+
 $('scan').addEventListener('click', async () => {
   say('Scanning…');
   try {
     const list = await api('/api/scan');
-    $('nets').innerHTML = '';
-    list.forEach(n => { const o = document.createElement('option'); o.value = n.ssid; o.label = n.ssid + (n.secure ? '' : ' (open)'); $('nets').appendChild(o); });
-    say(list.length ? list.length + ' networks found. Choose one in the Network name box.' : 'No networks found. Try again.', list.length ? 'ok' : 'bad');
-    $('wifi_ssid').focus();
+    const pick = $('netpick');
+    pick.innerHTML = '';
+    const first = document.createElement('option'); first.value = ''; first.textContent = 'Choose a network…'; pick.appendChild(first);
+    list.forEach(n => {
+      const o = document.createElement('option'); o.value = n.ssid;
+      o.textContent = n.ssid + (n.secure ? '' : ' (open)') + ', signal ' + (n.rssi > -60 ? 'strong' : n.rssi > -75 ? 'fair' : 'weak');
+      pick.appendChild(o);
+    });
+    $('netbox').hidden = !list.length;
+    say(list.length ? list.length + ' networks found. Choose one from the Networks found list.' : 'No networks found. Try again.', list.length ? 'ok' : 'bad');
+    if (list.length) pick.focus();
   } catch (e) { say('Scan failed: ' + e.message, 'bad'); }
 });
 
