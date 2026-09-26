@@ -9,8 +9,8 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BookBook setup</title>
 <style>
-  :root { color-scheme: light dark; --bg:#fff; --fg:#1a1a1a; --muted:#555; --line:#bbb; --accent:#0b5cad; --ok:#0a6b2b; --bad:#a30000; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#141414; --fg:#eee; --muted:#aaa; --line:#444; --accent:#6db3ff; --ok:#5fd38a; --bad:#ff8080; } }
+  :root { color-scheme: light dark; --bg:#fff; --fg:#1a1a1a; --muted:#555; --line:#bbb; --accent:#0b5cad; --hover:#dcebfa; --ok:#0a6b2b; --bad:#a30000; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141414; --fg:#eee; --muted:#aaa; --line:#444; --accent:#6db3ff; --hover:#243b55; --ok:#5fd38a; --bad:#ff8080; } }
   body { font: 18px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--fg); margin:0; }
   main { max-width: 40rem; margin: 0 auto; padding: 1rem 16px 4rem; }
   h1 { font-size: 1.6rem; margin: .5rem 0 0; }
@@ -22,8 +22,18 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
   input[type=range] { padding:0; }
   button { width:auto; cursor:pointer; background:var(--accent); color:#fff; border-color:var(--accent); margin:.6rem .5rem 0 0; }
   button.secondary { background:transparent; color:var(--accent); }
+  /* Feedback: lighter on hover, pushed in while pressed, dimmed with an ellipsis while its request runs. */
+  button { transition: transform .06s, filter .06s, background-color .1s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+  button:hover:not(:disabled) { filter: brightness(1.15); }
+  button.secondary:hover:not(:disabled) { background:var(--hover); filter:none; }
+  button:active:not(:disabled) { transform: translateY(2px) scale(.97); filter: brightness(.8); box-shadow:none; }
+  button.secondary:active:not(:disabled) { background:var(--hover); filter: brightness(.9); }
+  button:disabled { opacity:.55; cursor:progress; }
+  button.busy::after { content:' …'; }
   :focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
-  #status { min-height:1.6rem; font-weight:600; margin-top:1rem; }
+  /* Stays at the top of the screen while scrolling, so the result of a test is seen even when its button is far down the page. */
+  #status { position:sticky; top:0; z-index:1; background:var(--bg); min-height:1.6rem; font-weight:600; margin-top:1rem; padding:.4rem 0; border-bottom:1px solid var(--line); }
+  #status:empty { min-height:0; padding:0; border-bottom:0; }
   .ok { color:var(--ok); } .bad { color:var(--bad); }
   .info { color:var(--muted); font-size:.9rem; }
 </style>
@@ -66,14 +76,6 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
     <span class="hint">Speak a sentence after the beep (4 seconds). It plays back what it recorded, then says what it heard.</span>
   </fieldset>
 
-  <fieldset>
-    <legend>Try the librarian</legend>
-    <label for="ask">Type a request <span class="hint">(the reply is shown here, not spoken; it can look things up in your library)</span></label>
-    <input id="ask" maxlength="300" autocomplete="off">
-    <button type="button" class="secondary" id="askbtn">Ask</button>
-    <button type="button" class="secondary" id="testmem">Test memory</button>
-  </fieldset>
-
   <button type="submit" id="save">Save</button>
   <button type="button" class="secondary" id="reboot">Restart device</button>
 </form>
@@ -82,11 +84,22 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
 <script>
 const $ = id => document.getElementById(id);
 const say = (msg, cls) => { const s = $('status'); s.textContent = msg; s.className = cls || ''; };
+// The button that was just clicked shows it is working (dimmed, "…", disabled so it cannot be pressed twice)
+// until the request it started has finished.
+let lastButton = null;
+document.addEventListener('click', e => { lastButton = e.target.closest('button'); }, true);
+document.addEventListener('touchstart', () => {}, { passive: true });  // lets iOS show the :active look
 async function api(path, opts) {
-  const r = await fetch(path, opts);
-  let j = {}; try { j = await r.json(); } catch (e) {}
-  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-  return j;
+  const b = lastButton; lastButton = null;
+  if (b) { b.classList.add('busy'); b.disabled = true; }
+  try {
+    const r = await fetch(path, opts);
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
+  } finally {
+    if (b) { b.classList.remove('busy'); b.disabled = false; }
+  }
 }
 function hint(id, has) { $(id).textContent = has ? '(saved; leave blank to keep)' : '(not set)'; }
 
@@ -147,22 +160,6 @@ $('testmic').addEventListener('click', async () => {
     const level = r.peak < 300 ? ' Very quiet: check the microphone wiring, or the left/right setting.' : r.peak > 30000 ? ' Signal is clipping: lower the microphone gain.' : '';
     say((r.heard ? 'Heard: "' + r.heard + '". ' : 'No speech recognised (' + (r.status || 'no result') + '). ') + 'Level: rms ' + r.rms + ', peak ' + r.peak + ' of 32767.' + level, r.heard ? 'ok' : 'bad');
   } catch (e) { say('Microphone test failed: ' + e.message, 'bad'); }
-});
-
-$('askbtn').addEventListener('click', async () => {
-  const text = $('ask').value.trim();
-  if (!text) { say('Type a request first.', 'bad'); return; }
-  say('Thinking…');
-  try {
-    const r = await api('/api/test/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
-    say(r.reply, r.ok ? 'ok' : 'bad');
-  } catch (e) { say('Ask failed: ' + e.message, 'bad'); }
-});
-
-$('testmem').addEventListener('click', async () => {
-  say('Reading the memory file…');
-  try { const r = await api('/api/test/memory', { method: 'POST' }); say('Memory works. Remembered: ' + r.preferences + ' preferences, ' + r.authors + ' authors, ' + r.genres + ' genres, ' + r.history + ' books read, ' + r.standby + ' on hold.', 'ok'); }
-  catch (e) { say(e.message, 'bad'); }
 });
 
 $('testva').addEventListener('click', async () => {

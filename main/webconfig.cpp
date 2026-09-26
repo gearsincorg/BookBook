@@ -19,8 +19,6 @@
 #include "mbedtls/base64.h"
 #include "mdns.h"
 #include "webpage.h"
-#include "brain.h"
-#include "memory.h"
 #include "mic.h"
 #include "thinking.h"
 #include "va.h"
@@ -285,42 +283,6 @@ static esp_err_t h_test_mic(httpd_req_t* req) {
     return send_json(req, o);
 }
 
-// Types a request to the librarian instead of speaking it; returns the reply text (not spoken).
-// Runs the same brain, so read-only library tools run against the real account.
-static esp_err_t h_test_ask(httpd_req_t* req) {
-    if (!authorized(req)) return ESP_OK;
-    if (!wifi::connected()) return send_error(req, "409 Conflict", "Not on the internet yet: save Wi-Fi and restart first");
-    std::string body;
-    if (!read_body(req, body)) return send_error(req, "400 Bad Request", "Bad request body");
-    std::unique_ptr<cJSON, decltype(&cJSON_Delete)> root(cJSON_Parse(body.c_str()), cJSON_Delete);
-    cJSON* text = root ? cJSON_GetObjectItemCaseSensitive(root.get(), "text") : nullptr;
-    if (!cJSON_IsString(text) || !text->valuestring[0]) return send_error(req, "400 Bad Request", "Missing text");
-    std::string reply;
-    esp_err_t err = brain::respond(config::get(), text->valuestring, reply);
-    cJSON* o = cJSON_CreateObject();
-    cJSON_AddBoolToObject(o, "ok", err == ESP_OK);
-    cJSON_AddStringToObject(o, "reply", reply.c_str());
-    return send_json(req, o);
-}
-
-// Reads the shared memory file and reports what is in it (counts only, never the contents).
-static esp_err_t h_test_memory(httpd_req_t* req) {
-    if (!authorized(req)) return ESP_OK;
-    if (!wifi::connected()) return send_error(req, "409 Conflict", "Not on the internet yet: save Wi-Fi and restart first");
-    Config c = config::get();
-    if (!memory::configured(c)) return send_error(req, "409 Conflict", "No memory storage URL in this build");
-    if (memory::load(c) != ESP_OK) return send_error(req, "502 Bad Gateway", "Could not read the memory file: a network problem, or its token has expired");
-    memory::Counts n = memory::counts();
-    cJSON* o = cJSON_CreateObject();
-    cJSON_AddBoolToObject(o, "ok", true);
-    cJSON_AddNumberToObject(o, "preferences", n.preferences);
-    cJSON_AddNumberToObject(o, "authors", n.authors);
-    cJSON_AddNumberToObject(o, "genres", n.genres);
-    cJSON_AddNumberToObject(o, "history", n.history);
-    cJSON_AddNumberToObject(o, "standby", n.standby);
-    return send_json(req, o);
-}
-
 static esp_err_t h_reboot(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
     cJSON* o = cJSON_CreateObject();
@@ -421,8 +383,6 @@ esp_err_t start(bool trust_setup_ap) {
         {"/api/test/speak", HTTP_POST, h_test_speak, nullptr},
         {"/api/test/va", HTTP_POST, h_test_va, nullptr},
         {"/api/test/mic", HTTP_POST, h_test_mic, nullptr},
-        {"/api/test/memory", HTTP_POST, h_test_memory, nullptr},
-        {"/api/test/ask", HTTP_POST, h_test_ask, nullptr},
         {"/api/reboot", HTTP_POST, h_reboot, nullptr},
         {"/*", HTTP_GET, h_redirect, nullptr},  // last: captive-portal probes and unknown paths
     };

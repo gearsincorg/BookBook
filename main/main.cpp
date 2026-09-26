@@ -290,6 +290,7 @@ extern "C" void app_main() {
     bool talk_ended = false;
     int64_t down_since_ms = 0;
     bool last_online = wifi::connected();
+    bool image_confirmed = false;
     std::vector<int16_t> pcm;
     pcm.reserve(static_cast<size_t>(mic::kSampleRateHz) * kMaxTalkMs / 1000);
     while (true) {
@@ -328,7 +329,10 @@ extern "C" void app_main() {
         }
         was_down = down;
         if (!down && s_update_led_dirty.exchange(false)) show_idle_state();
-        if (now_ms > 60000) ota::mark_valid();  // a freshly installed image has now run a minute: keep it
+        if (!image_confirmed && now_ms > 60000) {  // a freshly installed image has now run a minute: keep it
+            ota::mark_valid();  // once only: it reads flash, and doing that 100 times a second stalled the CPU during speech
+            image_confirmed = true;
+        }
         if (!down && wifi::connected() != last_online) {
             last_online = wifi::connected();
             show_idle_state();
