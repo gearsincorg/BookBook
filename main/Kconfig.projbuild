@@ -48,7 +48,7 @@ menu "BookBook"
     config BOOKBOOK_MIC_GAIN
         int "Microphone software gain (multiplier)"
         range 1 32
-        default 4
+        default 3
 
     config BOOKBOOK_TOUCH_ENABLED
         bool "Use the capacitive touch pad as the button (off: the BOOT button is the button)"

@@ -125,7 +125,7 @@ extern "C" void app_main() {
         ESP_LOGI(TAG, "setup page: http://%s/ or http://bookbook.local/", wifi::ip().c_str());
         if (!cfg.azure_key.empty()) {
             azure::speak(cfg.azure_region.c_str(), cfg.azure_key.c_str(),
-                         "Hello. This is Book Book, speaking from an E S P 32.");
+                         "Hi Bruce. Use Press-To-talk to make changes to your library.");
         }
         // Read the shared memory file now so the first request already knows the member's preferences.
         if (memory::configured(cfg)) {
@@ -145,7 +145,7 @@ extern "C" void app_main() {
 
     // Button: push-to-talk. Recording runs while it is held (up to 15 s); on release the recording is
     // transcribed and answered. A press shorter than kMinTalkMs is a bump, not speech: ignored.
-    constexpr int kMinTalkMs = 400;
+    constexpr int kMinTalkMs = 700;
     constexpr int kMaxTalkMs = 15000;
     bool was_down = false;
     bool ignore_release = false;  // a press that only cancelled a reading/answer, or an over-long talk

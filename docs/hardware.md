@@ -48,7 +48,7 @@ Used until the Waveshare board is in hand. Selected with `CONFIG_BOOKBOOK_BOARD_
 Notes:
 - **PDM receive only works on I2S0** on the ESP32-S3 (the driver rejects I2S1), so the microphone is created on I2S0 by number and the speaker is pinned to I2S1.
 - The PDM clock runs at 2.048 MHz (16 kHz x 128), inside a typical PDM mic's 1-3.25 MHz range.
-- Microphone software gain is `CONFIG_BOOKBOOK_MIC_GAIN` (default 4x); SEL tied to 3V3 instead needs `CONFIG_BOOKBOOK_MIC_RIGHT_SLOT=y`.
+- Microphone software gain is `CONFIG_BOOKBOOK_MIC_GAIN` (default 3x; 4x clipped close-range speech); SEL tied to 3V3 instead needs `CONFIG_BOOKBOOK_MIC_RIGHT_SLOT=y`.
 - **Touch button** (`touch.cpp`, ported from PhilbotSays' `touch_sense.c`): calibrates on the untouched pad at power-up (10 samples x 10 ms), a touch is a raw reading more than 30% above baseline (released below 25%), polled every 20 ms with a two-poll debounce, and the baseline resets to the average of any 10 consecutive readings below it (recovers from a pad held or wet at power-up). Keep your hand off the pad while the board powers up.
 - BOOT is GPIO0, a strapping pin: never hold it while powering up or resetting (chip enters the ROM downloader). It is not used as a button unless `CONFIG_BOOKBOOK_TOUCH_ALSO_BOOT_BUTTON` is on.
 - GPIO3 (mic DAT) is also a strapping pin (JTAG source select); no effect in normal use.
