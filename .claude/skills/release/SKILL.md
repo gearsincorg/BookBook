@@ -24,7 +24,7 @@ exist **before** the build, and the tree must be clean. `tools/release.ps1` enfo
    and why, in one line.
 4. **Write the release notes** to a file in the scratchpad, in the style of the earlier releases (`gh release view
    <tag>`): plain-language bullets a member or family could follow, no internal jargon, about the user-visible
-   change. Title: a short phrase; the script prefixes "BookBook vX.Y.Z: ".
+   change. Title: a short phrase; the script prefixes "Librarian vX.Y.Z: ".
 5. **Do a dry run first if anything is unusual** (`-DryRun` builds and verifies but pushes nothing); otherwise run:
 
        .\tools\release.ps1 -Version vX.Y.Z -Title "short phrase" -NotesFile <notes file>

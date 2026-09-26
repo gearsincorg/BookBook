@@ -62,7 +62,7 @@ git push origin $Version
 if ($LASTEXITCODE -ne 0) { Fail "pushing the tag failed" }
 
 Step 5 "GitHub release"
-gh release create $Version --verify-tag --title "BookBook ${Version}: $Title" --notes-file $NotesFile
+gh release create $Version --verify-tag --title "Librarian ${Version}: $Title" --notes-file $NotesFile
 if ($LASTEXITCODE -ne 0) { Fail "creating the release failed (the tag is pushed; firmware NOT published)" }
 
 Step 6 "publish the firmware"
