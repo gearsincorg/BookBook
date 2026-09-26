@@ -33,13 +33,17 @@ esp_err_t init() {
     ESP_RETURN_ON_ERROR(led_strip_new_rmt_device(&strip_cfg, &rmt_cfg, &s_leds), TAG, "leds");
     led_strip_clear(s_leds);
 
-#ifdef CONFIG_BOOKBOOK_TOUCH_ALSO_BOOT_BUTTON
+#if !defined(CONFIG_BOOKBOOK_TOUCH_ENABLED) || defined(CONFIG_BOOKBOOK_TOUCH_ALSO_BOOT_BUTTON)
+#define BOOKBOOK_USE_BOOT_BUTTON 1
+#endif
+#ifdef BOOKBOOK_USE_BOOT_BUTTON
     gpio_config_t btn = {};
     btn.pin_bit_mask = 1ULL << kXiaoButton;
     btn.mode = GPIO_MODE_INPUT;
     btn.pull_up_en = GPIO_PULLUP_ENABLE;
     ESP_RETURN_ON_ERROR(gpio_config(&btn), TAG, "button");
 #endif
+#ifdef CONFIG_BOOKBOOK_TOUCH_ENABLED
     ESP_RETURN_ON_ERROR(touch::start(), TAG, "touch");  // calibrates on the untouched pad: keep hands off at power-up
     ESP_LOGI(TAG, "XIAO ESP32-S3 dev board: %d LEDs on GPIO%d, Key1 = touch pad GPIO%d%s", kXiaoLedCount, kXiaoLedGpio,
              CONFIG_BOOKBOOK_TOUCH_PIN,
@@ -49,6 +53,9 @@ esp_err_t init() {
              ""
 #endif
     );
+#else
+    ESP_LOGI(TAG, "XIAO ESP32-S3 dev board: %d LEDs on GPIO%d, touch sensor OFF, Key1 = BOOT(GPIO0)", kXiaoLedCount, kXiaoLedGpio);
+#endif
     return ESP_OK;
 }
 
@@ -62,10 +69,14 @@ void set_amp(bool) {}
 
 bool key_pressed(Key key) {
     if (key != Key::Key1) return false;
-#ifdef CONFIG_BOOKBOOK_TOUCH_ALSO_BOOT_BUTTON
+#ifdef BOOKBOOK_USE_BOOT_BUTTON
     if (gpio_get_level(kXiaoButton) == 0) return true;  // active-low: switched to GND
 #endif
+#ifdef CONFIG_BOOKBOOK_TOUCH_ENABLED
     return touch::present();
+#else
+    return false;
+#endif
 }
 
 #else  // Waveshare ESP32-S3-AUDIO-Board

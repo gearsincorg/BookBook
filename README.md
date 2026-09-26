@@ -12,9 +12,9 @@ ESP-IDF 5.5 (C++). From a PowerShell prompt with IDF activated:
     idf.py build
     idf.py -p COMx flash monitor
 
-Wi-Fi for development: create `secrets/sdkconfig.secrets` (gitignored) containing
+Secrets and per-board defaults live in `secrets/sdkconfig.secrets` (gitignored; see [docs/setup.md](docs/setup.md#what-is-editable-and-what-is-baked-in)). For example, Wi-Fi
 
     CONFIG_BOOKBOOK_WIFI_SSID="..."
     CONFIG_BOOKBOOK_WIFI_PASSWORD="..."
 
-This is temporary; the web configuration portal replaces it.
+The setup page then edits only the Wi-Fi, library login and volume; the keys are baked in at build time.

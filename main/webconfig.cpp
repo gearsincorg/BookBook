@@ -112,15 +112,10 @@ static esp_err_t h_get_config(httpd_req_t* req) {
     cJSON* o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "wifi_ssid", c.wifi_ssid.c_str());
     cJSON_AddStringToObject(o, "va_user", c.va_user.c_str());
-    cJSON_AddStringToObject(o, "azure_region", c.azure_region.c_str());
     cJSON_AddNumberToObject(o, "volume", c.volume);
-    cJSON_AddBoolToObject(o, "dry_run", c.dry_run);
     cJSON* has = cJSON_AddObjectToObject(o, "has");  // secrets are never sent back, only whether set
     cJSON_AddBoolToObject(has, "wifi_password", !c.wifi_password.empty());
     cJSON_AddBoolToObject(has, "va_password", !c.va_password.empty());
-    cJSON_AddBoolToObject(has, "azure_key", !c.azure_key.empty());
-    cJSON_AddBoolToObject(has, "anthropic_key", !c.anthropic_key.empty());
-    cJSON_AddBoolToObject(has, "memory_url", !c.memory_url.empty());
     cJSON_AddStringToObject(o, "mac", mac_string().c_str());
     cJSON_AddStringToObject(o, "ip", wifi::ip().c_str());
     cJSON_AddStringToObject(o, "ap", wifi::ap_ssid().c_str());
@@ -163,12 +158,7 @@ static esp_err_t h_post_config(httpd_req_t* req) {
     bool ok = take_string(root.get(), "wifi_ssid", c.wifi_ssid, 32, false) &&
               take_string(root.get(), "wifi_password", c.wifi_password, 63, true) &&
               take_string(root.get(), "va_user", c.va_user, 80, false) &&
-              take_string(root.get(), "va_password", c.va_password, 80, true) &&
-              take_string(root.get(), "azure_key", c.azure_key, 128, true) &&
-              take_string(root.get(), "azure_region", c.azure_region, 24, false) &&
-              take_string(root.get(), "anthropic_key", c.anthropic_key, 160, true) &&
-              take_string(root.get(), "memory_url", c.memory_url, 700, true) &&
-              take_string(root.get(), "admin_password", c.admin_password, 64, true);
+              take_string(root.get(), "va_password", c.va_password, 80, true);
     if (!ok) return send_error(req, "400 Bad Request", "A field is too long");
 
     cJSON* vol = cJSON_GetObjectItemCaseSensitive(root.get(), "volume");
@@ -177,12 +167,9 @@ static esp_err_t h_post_config(httpd_req_t* req) {
         if (v < 1 || v > 100) return send_error(req, "400 Bad Request", "Volume must be 1 to 100");
         c.volume = v;
     }
-    cJSON* dry = cJSON_GetObjectItemCaseSensitive(root.get(), "dry_run");
-    if (cJSON_IsBool(dry)) c.dry_run = cJSON_IsTrue(dry);
     if (!c.wifi_password.empty() && c.wifi_password.size() < 8) {
         return send_error(req, "400 Bad Request", "Wi-Fi password must be at least 8 characters");
     }
-    if (c.azure_region.empty()) return send_error(req, "400 Bad Request", "Azure region is required");
 
     if (config::save(c) != ESP_OK) return send_error(req, "500 Internal Server Error", "Could not save");
     audio::set_volume(c.volume);
@@ -214,7 +201,7 @@ static esp_err_t h_test_speak(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
     if (!wifi::connected()) return send_error(req, "409 Conflict", "Not on the internet yet: save Wi-Fi and restart first");
     Config c = config::get();
-    if (c.azure_key.empty()) return send_error(req, "409 Conflict", "No Azure key saved");
+    if (c.azure_key.empty()) return send_error(req, "409 Conflict", "No Azure key in this build");
 
     // Optional {"volume": N}: try that level for this test only, without saving it.
     int test_volume = c.volume;
@@ -260,7 +247,7 @@ static esp_err_t h_test_mic(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
     if (!wifi::connected()) return send_error(req, "409 Conflict", "Not on the internet yet: save Wi-Fi and restart first");
     Config c = config::get();
-    if (c.azure_key.empty()) return send_error(req, "409 Conflict", "No Azure key saved");
+    if (c.azure_key.empty()) return send_error(req, "409 Conflict", "No Azure key in this build");
 
     constexpr int kRecordMs = 4000;
     thinking::beep();  // "speak now"
@@ -315,8 +302,8 @@ static esp_err_t h_test_memory(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
     if (!wifi::connected()) return send_error(req, "409 Conflict", "Not on the internet yet: save Wi-Fi and restart first");
     Config c = config::get();
-    if (!memory::configured(c)) return send_error(req, "409 Conflict", "No memory storage URL saved");
-    if (memory::load(c) != ESP_OK) return send_error(req, "502 Bad Gateway", "Could not read the memory file; check the URL and its expiry");
+    if (!memory::configured(c)) return send_error(req, "409 Conflict", "No memory storage URL in this build");
+    if (memory::load(c) != ESP_OK) return send_error(req, "502 Bad Gateway", "Could not read the memory file; its token may have expired");
     memory::Counts n = memory::counts();
     cJSON* o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", true);

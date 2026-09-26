@@ -58,24 +58,6 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
   </fieldset>
 
   <fieldset>
-    <legend>Speech (Azure)</legend>
-    <label for="azure_key">Azure Speech key <span class="hint" id="h_azure_key"></span></label>
-    <input id="azure_key" name="azure_key" type="password" maxlength="128" autocomplete="new-password">
-    <label for="azure_region">Azure region</label>
-    <input id="azure_region" name="azure_region" maxlength="24" autocapitalize="off" spellcheck="false">
-  </fieldset>
-
-  <fieldset>
-    <legend>Assistant (Claude)</legend>
-    <label for="anthropic_key">Anthropic API key <span class="hint" id="h_anthropic_key"></span></label>
-    <input id="anthropic_key" name="anthropic_key" type="password" maxlength="160" autocomplete="new-password">
-    <label for="memory_url">Memory storage URL <span class="hint" id="h_memory_url"></span></label>
-    <input id="memory_url" name="memory_url" type="password" maxlength="700" autocomplete="new-password">
-    <button type="button" class="secondary" id="testmem">Test memory</button>
-    <label for="dry_run"><input id="dry_run" name="dry_run" type="checkbox" style="width:auto"> Practice mode: pretend to add and remove books, and change nothing on my real library account</label>
-  </fieldset>
-
-  <fieldset>
     <legend>Sound</legend>
     <label for="volume">Speaker volume: <span id="volout">80</span>%</label>
     <input id="volume" name="volume" type="range" min="1" max="100" step="1">
@@ -89,12 +71,7 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
     <label for="ask">Type a request <span class="hint">(the reply is shown here, not spoken; it can look things up in your library)</span></label>
     <input id="ask" maxlength="300" autocomplete="off">
     <button type="button" class="secondary" id="askbtn">Ask</button>
-  </fieldset>
-
-  <fieldset>
-    <legend>This page</legend>
-    <label for="admin_password">Change setup-page password <span class="hint">(user name is "admin"; leave blank to keep)</span></label>
-    <input id="admin_password" name="admin_password" type="password" maxlength="64" autocomplete="new-password">
+    <button type="button" class="secondary" id="testmem">Test memory</button>
   </fieldset>
 
   <button type="submit" id="save">Save</button>
@@ -116,9 +93,8 @@ function hint(id, has) { $(id).textContent = has ? '(saved; leave blank to keep)
 async function load() {
   const c = await api('/api/config');
   $('wifi_ssid').value = c.wifi_ssid; $('va_user').value = c.va_user;
-  $('azure_region').value = c.azure_region; $('volume').value = c.volume; $('volout').textContent = c.volume; $('dry_run').checked = c.dry_run;
+  $('volume').value = c.volume; $('volout').textContent = c.volume;
   hint('h_wifi_pass', c.has.wifi_password); hint('h_va_pass', c.has.va_password);
-  hint('h_azure_key', c.has.azure_key); hint('h_memory_url', c.has.memory_url); hint('h_anthropic_key', c.has.anthropic_key);
   $('info').textContent = 'Device ' + c.mac + (c.ip ? ' on your network at ' + c.ip : ' (not on your network yet)') +
     (c.ap ? '. Setup network: ' + c.ap : '') + '.';
 }
@@ -153,7 +129,7 @@ $('f').addEventListener('submit', async ev => {
   try {
     const r = await api('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     say('Saved.' + (r.restart_needed ? ' Restart the device to use the new Wi-Fi or password.' : ''), 'ok');
-    ['wifi_password','va_password','azure_key','anthropic_key','memory_url','admin_password'].forEach(k => $(k).value = '');
+    ['wifi_password','va_password'].forEach(k => $(k).value = '');
     load();
   } catch (e) { say('Save failed: ' + e.message, 'bad'); }
 });
@@ -184,7 +160,7 @@ $('askbtn').addEventListener('click', async () => {
 });
 
 $('testmem').addEventListener('click', async () => {
-  say('Reading the memory file… (save first if you just changed the URL)');
+  say('Reading the memory file…');
   try { const r = await api('/api/test/memory', { method: 'POST' }); say('Memory works. Remembered: ' + r.preferences + ' preferences, ' + r.authors + ' authors, ' + r.genres + ' genres, ' + r.history + ' books read.', 'ok'); }
   catch (e) { say(e.message, 'bad'); }
 });

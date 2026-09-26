@@ -50,6 +50,13 @@ menu "BookBook"
         range 1 32
         default 4
 
+    config BOOKBOOK_TOUCH_ENABLED
+        bool "Use the capacitive touch pad as the button (off: the BOOT button is the button)"
+        default y
+        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
+        help
+            Turn this off to run without the touch sensor at all (for example to rule it out while
+            debugging); the BOOT button (GPIO0) then becomes the button.
     config BOOKBOOK_TOUCH_PIN
         int "Capacitive touch pad GPIO, used as the button (XIAO stand-in)"
         default 6
@@ -65,6 +72,22 @@ menu "BookBook"
             ORs the BOOT button in with the touch pad, like PhilbotSays' dev button. Off by default:
             the touch pad is the button. Never hold BOOT while powering up or resetting.
 
+    config BOOKBOOK_ANTHROPIC_KEY
+        string "Anthropic API key (baked in)"
+        default ""
+    config BOOKBOOK_MEMORY_URL
+        string "Memory storage container SAS URL (baked in)"
+        default ""
+    config BOOKBOOK_PRACTICE_MODE
+        bool "Practice mode: pretend to add and remove books, change nothing on the real account"
+        default y
+    config BOOKBOOK_VA_USER
+        string "Library login: email or VA id (default; editable on the setup page)"
+        default ""
+    config BOOKBOOK_VA_PASSWORD
+        string "Library password (default; editable on the setup page)"
+        default ""
+
     config BOOKBOOK_CLAUDE_MODEL
         string "Claude model id"
         default "claude-sonnet-5"
@@ -73,6 +96,13 @@ menu "BookBook"
         int "Software volume, percent of full scale"
         range 1 100
         default 80
+
+    config BOOKBOOK_ADMIN_PASSWORD
+        string "Factory default password for the setup page (user name: admin)"
+        default "bookbook"
+        help
+            Used until a different password is saved on the setup page. Override it in the git-ignored
+            secrets/sdkconfig.secrets rather than committing a real value.
 
     config BOOKBOOK_SETUP_AP_PASSWORD
         string "Password of the BookBook-XXXX setup Wi-Fi network (8-63 characters)"

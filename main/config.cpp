@@ -18,11 +18,11 @@ struct StrField {
     std::string Config::*member;
 };
 static const StrField kStrFields[] = {
-    {"wifi_ssid", &Config::wifi_ssid},   {"wifi_pass", &Config::wifi_password},
-    {"va_user", &Config::va_user},       {"va_pass", &Config::va_password},
-    {"az_key", &Config::azure_key},      {"az_region", &Config::azure_region},
-    {"anth_key", &Config::anthropic_key}, {"admin_pw", &Config::admin_password},
-    {"mem_url", &Config::memory_url},
+    // The only strings saved on the device: the member's environment.
+    {"wifi_ssid", &Config::wifi_ssid},
+    {"wifi_pass", &Config::wifi_password},
+    {"va_user", &Config::va_user},
+    {"va_pass", &Config::va_password},
 };
 
 namespace config {
@@ -37,12 +37,33 @@ void load() {
     }
     if (err != ESP_OK) ESP_LOGE(TAG, "nvs init: %s", esp_err_to_name(err));
 
-    Config cfg;  // Kconfig (developer) defaults first
-    cfg.wifi_ssid = CONFIG_BOOKBOOK_WIFI_SSID;
-    cfg.wifi_password = CONFIG_BOOKBOOK_WIFI_PASSWORD;
+    // Baked into the firmware at build time (secrets/sdkconfig.secrets): everything the program needs.
+    Config cfg;
     cfg.azure_key = CONFIG_BOOKBOOK_AZURE_SPEECH_KEY;
     cfg.azure_region = CONFIG_BOOKBOOK_AZURE_SPEECH_REGION;
+    cfg.anthropic_key = CONFIG_BOOKBOOK_ANTHROPIC_KEY;
+    cfg.memory_url = CONFIG_BOOKBOOK_MEMORY_URL;
+    cfg.admin_password = CONFIG_BOOKBOOK_ADMIN_PASSWORD;
+#ifdef CONFIG_BOOKBOOK_PRACTICE_MODE
+    cfg.dry_run = true;
+#else
+    cfg.dry_run = false;
+#endif
+    // The member's environment: build defaults for a fresh board, overridden by what was saved.
+    cfg.wifi_ssid = CONFIG_BOOKBOOK_WIFI_SSID;
+    cfg.wifi_password = CONFIG_BOOKBOOK_WIFI_PASSWORD;
+    cfg.va_user = CONFIG_BOOKBOOK_VA_USER;
+    cfg.va_password = CONFIG_BOOKBOOK_VA_PASSWORD;
     cfg.volume = CONFIG_BOOKBOOK_SPEAKER_VOLUME;
+
+    // Earlier builds also saved program settings on the device. They are baked in now, so remove the
+    // leftovers (which also clears old secrets out of flash).
+    nvs_handle_t rw;
+    if (nvs_open(kNamespace, NVS_READWRITE, &rw) == ESP_OK) {
+        for (const char* key : {"az_key", "az_region", "anth_key", "admin_pw", "mem_url", "dry_run"}) nvs_erase_key(rw, key);
+        nvs_commit(rw);
+        nvs_close(rw);
+    }
 
     nvs_handle_t h;
     if (nvs_open(kNamespace, NVS_READONLY, &h) == ESP_OK) {
@@ -58,8 +79,6 @@ void load() {
         }
         int32_t vol;
         if (nvs_get_i32(h, "volume", &vol) == ESP_OK) cfg.volume = vol;
-        int32_t dry;
-        if (nvs_get_i32(h, "dry_run", &dry) == ESP_OK) cfg.dry_run = dry != 0;
         nvs_close(h);
     }
 
@@ -84,7 +103,6 @@ esp_err_t save(const Config& cfg) {
         if (err != ESP_OK) break;
     }
     if (err == ESP_OK) err = nvs_set_i32(h, "volume", cfg.volume);
-    if (err == ESP_OK) err = nvs_set_i32(h, "dry_run", cfg.dry_run ? 1 : 0);
     if (err == ESP_OK) err = nvs_commit(h);
     nvs_close(h);
     if (err != ESP_OK) return err;
