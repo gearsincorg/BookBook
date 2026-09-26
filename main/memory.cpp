@@ -5,6 +5,7 @@
 #include <ctime>
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
@@ -239,6 +240,21 @@ std::string prompt_snapshot() {
         cJSON_AddItemToArray(authors, x);
     }
     cJSON_AddItemToObject(o, "preferredGenres", cJSON_Duplicate(arr("PreferredGenres"), true));
+    // Books the member rated 4 or 5 (their favourites), capped so the prompt stays small.
+    cJSON* favs = cJSON_AddArrayToObject(o, "favoriteBooks");
+    const cJSON* h;
+    int n = 0;
+    cJSON_ArrayForEach(h, arr("ReadingHistory")) {
+        const cJSON* rating = cJSON_GetObjectItemCaseSensitive(h, "Rating");
+        if (!cJSON_IsNumber(rating) || rating->valueint < 4 || n >= 30) continue;
+        cJSON* x = cJSON_CreateObject();
+        cJSON_AddStringToObject(x, "title", str(h, "Title").c_str());
+        std::string who = va::natural_author(str(h, "Author"));
+        if (!who.empty()) cJSON_AddStringToObject(x, "author", who.c_str());
+        cJSON_AddNumberToObject(x, "rating", rating->valueint);
+        cJSON_AddItemToArray(favs, x);
+        n++;
+    }
     cJSON_AddNumberToObject(o, "readingHistoryEntryCount", cJSON_GetArraySize(arr("ReadingHistory")));
     return print(o);
 }
@@ -268,7 +284,7 @@ std::string search_history(const std::string& query) {
         cJSON* x = cJSON_CreateObject();
         cJSON_AddStringToObject(x, "title", str(e, "Title").c_str());
         cJSON_AddStringToObject(x, "author", va::natural_author(str(e, "Author")).c_str());
-        cJSON_AddStringToObject(x, "dateAdded", str(e, "DateAdded").c_str());
+        if (!str(e, "DateAdded").empty()) cJSON_AddStringToObject(x, "dateAdded", str(e, "DateAdded").c_str());
         const cJSON* removed = cJSON_GetObjectItemCaseSensitive(e, "DateRemoved");
         if (cJSON_IsString(removed)) cJSON_AddStringToObject(x, "dateRemoved", removed->valuestring);
         const cJSON* rating = cJSON_GetObjectItemCaseSensitive(e, "Rating");
@@ -276,6 +292,104 @@ std::string search_history(const std::string& query) {
         cJSON_AddItemToArray(out, x);
     }
     return print(out);
+}
+
+// The list entry for a book: by catalogue id when both have one, otherwise by exact title (ignoring case).
+static cJSON* find_entry(const std::string& title, const std::string& bookshare_id) {
+    cJSON* e;
+    if (!bookshare_id.empty()) {
+        cJSON_ArrayForEach(e, arr("ReadingHistory")) {
+            if (str(e, "BookshareId") == bookshare_id) return e;
+        }
+    }
+    if (!title.empty()) {
+        cJSON_ArrayForEach(e, arr("ReadingHistory")) {
+            if (lower(str(e, "Title")) == lower(title)) return e;
+        }
+    }
+    return nullptr;
+}
+
+static int rating_of(const cJSON* e) {
+    const cJSON* r = cJSON_GetObjectItemCaseSensitive(e, "Rating");
+    return cJSON_IsNumber(r) ? r->valueint : 0;
+}
+
+static void set_rating(cJSON* e, int rating) {
+    cJSON_DeleteItemFromObjectCaseSensitive(e, "Rating");
+    cJSON_AddNumberToObject(e, "Rating", rating);
+}
+
+esp_err_t add_book(const Config& c, const std::string& title, const std::string& author, const std::string& bookshare_id,
+                   bool favorite, bool* created) {
+    bool made = false;
+    std::string nat = va::natural_author(author);
+    esp_err_t err = update(c, [&] {
+        if (cJSON* e = find_entry(title, bookshare_id)) {
+            made = false;
+            if (favorite && rating_of(e) < 4) {
+                set_rating(e, 5);
+            } else if (!favorite && rating_of(e) >= 4) {
+                cJSON_DeleteItemFromObjectCaseSensitive(e, "Rating");
+                cJSON_AddNullToObject(e, "Rating");
+            }
+            if (str(e, "Author").empty() && !nat.empty()) {
+                cJSON_DeleteItemFromObjectCaseSensitive(e, "Author");
+                cJSON_AddStringToObject(e, "Author", nat.c_str());
+            }
+            if (str(e, "BookshareId").empty() && !bookshare_id.empty()) {
+                cJSON_DeleteItemFromObjectCaseSensitive(e, "BookshareId");
+                cJSON_AddStringToObject(e, "BookshareId", bookshare_id.c_str());
+            }
+            return;
+        }
+        made = true;
+        cJSON* e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "Title", title.c_str());
+        if (nat.empty()) cJSON_AddNullToObject(e, "Author");
+        else cJSON_AddStringToObject(e, "Author", nat.c_str());
+        if (bookshare_id.empty()) cJSON_AddNullToObject(e, "BookshareId");
+        else cJSON_AddStringToObject(e, "BookshareId", bookshare_id.c_str());
+        // No DateAdded: it was never on the bookshelf. No DateRemoved either.
+        cJSON_AddNullToObject(e, "DateRemoved");
+        if (favorite) cJSON_AddNumberToObject(e, "Rating", 5);
+        else cJSON_AddNullToObject(e, "Rating");
+        cJSON_AddItemToArray(arr("ReadingHistory"), e);
+    });
+    if (created) *created = made;
+    return err;
+}
+
+esp_err_t remove_book(const Config& c, const std::string& title, std::string* matched_title, int* matches) {
+    Lock lock;
+    if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
+    if (!s_loaded && load_locked(c) != ESP_OK) return ESP_FAIL;
+
+    // Prefer an exact (case-insensitive) title; otherwise a partial match must be unique.
+    std::vector<std::string> exact, partial;
+    const cJSON* e;
+    cJSON_ArrayForEach(e, arr("ReadingHistory")) {
+        std::string t = str(e, "Title");
+        if (lower(t) == lower(title)) exact.push_back(t);
+        else if (contains_ci(t, title)) partial.push_back(t);
+    }
+    const std::vector<std::string>& hits = !exact.empty() ? exact : partial;
+    if (matches) *matches = static_cast<int>(hits.size());
+    if (hits.empty()) return ESP_ERR_NOT_FOUND;
+    if (hits.size() > 1) return ESP_ERR_INVALID_SIZE;
+    const std::string found = hits[0];
+    if (matched_title) *matched_title = found;
+
+    return update(c, [&] {
+        cJSON* list = arr("ReadingHistory");
+        int n = cJSON_GetArraySize(list);
+        for (int i = 0; i < n; i++) {
+            if (str(cJSON_GetArrayItem(list, i), "Title") == found) {
+                cJSON_DeleteItemFromArray(list, i);
+                return;
+            }
+        }
+    });
 }
 
 esp_err_t rate(const Config& c, const std::string& title, int rating, std::string* matched_title, int* matches) {
@@ -344,6 +458,39 @@ esp_err_t add_author(const Config& c, const std::string& name, bool favorite) {
     });
 }
 
+esp_err_t remove_author(const Config& c, const std::string& name, std::string* matched_name, int* matches) {
+    Lock lock;
+    if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
+    if (!s_loaded && load_locked(c) != ESP_OK) return ESP_FAIL;
+
+    // Prefer an exact match on the natural name; otherwise a partial match must be unique.
+    const std::string want = author_key(name);
+    std::vector<std::string> exact, partial;
+    const cJSON* a;
+    cJSON_ArrayForEach(a, arr("PreferredAuthors")) {
+        std::string nat = va::natural_author(str(a, "AuthorName"));
+        if (lower(nat) == want) exact.push_back(nat);
+        else if (contains_ci(nat, name) || contains_ci(name, nat)) partial.push_back(nat);
+    }
+    const std::vector<std::string>& hits = !exact.empty() ? exact : partial;
+    if (matches) *matches = static_cast<int>(hits.size());
+    if (hits.empty()) return ESP_ERR_NOT_FOUND;
+    if (hits.size() > 1) return ESP_ERR_INVALID_SIZE;
+    const std::string found = hits[0];
+    if (matched_name) *matched_name = found;
+
+    return update(c, [&] {
+        cJSON* list = arr("PreferredAuthors");
+        int n = cJSON_GetArraySize(list);
+        for (int i = 0; i < n; i++) {
+            if (lower(va::natural_author(str(cJSON_GetArrayItem(list, i), "AuthorName"))) == lower(found)) {
+                cJSON_DeleteItemFromArray(list, i);
+                return;
+            }
+        }
+    });
+}
+
 esp_err_t add_genre(const Config& c, const std::string& genre) {
     return update(c, [&] {
         cJSON* g;
@@ -368,20 +515,75 @@ AddInfo add_info(const std::string& author) {
     return info;
 }
 
-esp_err_t log_added(const Config& c, const std::string& title, const std::string& author, const std::string& bookshare_id) {
-    return update(c, [&] {
-        cJSON* e = cJSON_CreateObject();
-        cJSON_AddStringToObject(e, "Title", title.c_str());
-        if (author.empty()) cJSON_AddNullToObject(e, "Author");
-        else cJSON_AddStringToObject(e, "Author", author.c_str());
-        if (bookshare_id.empty()) cJSON_AddNullToObject(e, "BookshareId");
-        else cJSON_AddStringToObject(e, "BookshareId", bookshare_id.c_str());
+// Splits "Tom Clancy, Steve Pieczenik" or "A and B" into single names (natural names contain no commas).
+static std::vector<std::string> split_authors(const std::string& names) {
+    std::vector<std::string> out;
+    std::string rest = names;
+    while (!rest.empty()) {
+        size_t comma = rest.find(", "), and_pos = rest.find(" and ");
+        size_t cut = std::min(comma, and_pos);
+        std::string one = rest.substr(0, cut);
+        size_t skip = cut == std::string::npos ? rest.size() : (cut == comma ? 2 : 5);
+        rest = cut == std::string::npos ? "" : rest.substr(cut + skip);
+        while (!one.empty() && one.front() == ' ') one.erase(one.begin());
+        while (!one.empty() && one.back() == ' ') one.pop_back();
+        if (!one.empty()) out.push_back(one);
+    }
+    return out;
+}
+
+esp_err_t log_added(const Config& c, const std::string& title, const std::string& author, const std::string& bookshare_id,
+                    bool* author_added) {
+    bool added_author = false;
+    esp_err_t err = update(c, [&] {
+        added_author = false;
         std::string when = now_iso();
-        if (!when.empty()) cJSON_AddStringToObject(e, "DateAdded", when.c_str());
-        cJSON_AddNullToObject(e, "DateRemoved");
-        cJSON_AddNullToObject(e, "Rating");
-        cJSON_AddItemToArray(arr("ReadingHistory"), e);
+        if (cJSON* existing = find_entry(title, bookshare_id)) {
+            // Already on the list (for example a favourite added earlier, or borrowed before): reuse the
+            // entry, with a fresh add date, no remove date, and its rating and author kept.
+            cJSON_DeleteItemFromObjectCaseSensitive(existing, "DateAdded");
+            if (!when.empty()) cJSON_AddStringToObject(existing, "DateAdded", when.c_str());
+            cJSON_DeleteItemFromObjectCaseSensitive(existing, "DateRemoved");
+            cJSON_AddNullToObject(existing, "DateRemoved");
+            if (str(existing, "Author").empty() && !author.empty()) {
+                cJSON_DeleteItemFromObjectCaseSensitive(existing, "Author");
+                cJSON_AddStringToObject(existing, "Author", author.c_str());
+            }
+            if (str(existing, "BookshareId").empty() && !bookshare_id.empty()) {
+                cJSON_DeleteItemFromObjectCaseSensitive(existing, "BookshareId");
+                cJSON_AddStringToObject(existing, "BookshareId", bookshare_id.c_str());
+            }
+        } else {
+            cJSON* e = cJSON_CreateObject();
+            cJSON_AddStringToObject(e, "Title", title.c_str());
+            if (author.empty()) cJSON_AddNullToObject(e, "Author");
+            else cJSON_AddStringToObject(e, "Author", author.c_str());
+            if (bookshare_id.empty()) cJSON_AddNullToObject(e, "BookshareId");
+            else cJSON_AddStringToObject(e, "BookshareId", bookshare_id.c_str());
+            if (!when.empty()) cJSON_AddStringToObject(e, "DateAdded", when.c_str());
+            cJSON_AddNullToObject(e, "DateRemoved");
+            cJSON_AddNullToObject(e, "Rating");
+            cJSON_AddItemToArray(arr("ReadingHistory"), e);
+        }
+
+        // Adding a book puts its author on the authors list too, if they are not already there.
+        for (const std::string& who : split_authors(va::natural_author(author))) {
+            bool known = false;
+            cJSON* a;
+            cJSON_ArrayForEach(a, arr("PreferredAuthors")) {
+                if (author_key(str(a, "AuthorName")) == lower(who)) known = true;
+            }
+            if (known) continue;
+            cJSON* x = cJSON_CreateObject();
+            cJSON_AddStringToObject(x, "AuthorName", who.c_str());
+            cJSON_AddBoolToObject(x, "IsFavorite", false);
+            if (!when.empty()) cJSON_AddStringToObject(x, "DateAdded", when.c_str());
+            cJSON_AddItemToArray(arr("PreferredAuthors"), x);
+            added_author = true;
+        }
     });
+    if (author_added) *author_added = added_author;
+    return err;
 }
 
 esp_err_t log_removed(const Config& c, const std::string& bookshare_id) {

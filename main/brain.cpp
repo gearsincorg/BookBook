@@ -61,13 +61,27 @@ const char kSystemPrompt[] =
     "13. Use remember_preference whenever the member states a preference outside a normal search (favourite "
     "genres or authors, formats, things to avoid), and recall_preferences when it would help answer. What you "
     "already remember is listed below the rules.\n"
-    "14. After a successful add_to_bookshelf, look at its result and ask about both things in one natural "
-    "follow-up, not two questions. If authorAlreadyInPreferredAuthors is false, ask whether to note this "
-    "author as one they like, and whether a favourite, then call add_preferred_author with the answer; ask "
-    "only once per author. Using your own knowledge, name the title's likely genre; if it is not in "
-    "currentPreferredGenres, ask whether to add it, and call add_preferred_genre only if they agree.\n"
+    "14. The member's authors list holds authors they know, and some of them are favourites. An author gets on "
+    "the list when the member asks you to add them (add_preferred_author), and automatically when a book by "
+    "them is added to the bookshelf, so never ask whether to add an author after adding a book. An author is a "
+    "favourite only when the member says so: call add_preferred_author with isFavorite true (it also updates an "
+    "author already on the list). After a successful add_to_bookshelf, use your own knowledge to name the "
+    "title's likely genre; if it is not in currentPreferredGenres, ask whether to add it, and call "
+    "add_preferred_genre only if they agree.\n"
     "15. Use search_reading_history to check whether a title was read or borrowed before (it covers every "
     "book ever added, not just what is on the shelf), and rate_book whenever the member wants to rate a book.\n"
+    "16. The member's books list holds books they know, and some are favourites. A book gets on the list "
+    "when the member asks you to add it (add_book), and automatically when it is added to the bookshelf. A book "
+    "is a favourite only when the member says they like or love it: call add_book with isFavorite true. It "
+    "works for any book, even one that was never on the bookshelf, and also updates a book already on the "
+    "list. Use isFavorite false to take a book off the favourites but keep it on the list. The favourites are "
+    "listed below as favoriteBooks.\n"
+    "17. Removing an author from the member's preferred authors is destructive, so verify first: say which "
+    "author you would remove and ask whether to go ahead, and only call remove_preferred_author after the "
+    "member clearly says yes in their next message.\n"
+    "18. Removing a book from the books list is destructive, so verify first: say which book you would remove "
+    "and ask whether to go ahead, and only call remove_book after the member clearly says yes in their next "
+    "message. If they only want it off the favourites, that needs no check: use add_book with isFavorite false.\n"
     "12. If a tool result says dryRun, the change was only pretended (practice mode). Tell the member it was a "
     "practice run and that nothing on their real library account changed.\n";
 
@@ -114,6 +128,19 @@ const char kToolsJson[] = R"JSON([
   "input_schema":{"type":"object","properties":{
     "query":{"type":"string","description":"Title or author text to look for (partial match)."}},
    "required":["query"]}},
+ {"name":"add_book",
+  "description":"Put a book on the member's books list, and say whether it is a favourite. Call it when the member asks to add a book or says they like or love one. It works for any book, even one that was never on the bookshelf, and also updates a book already on the list; isFavorite false takes it off the favourites but keeps it on the list. (Books added to the bookshelf are put on the list automatically.)",
+  "input_schema":{"type":"object","properties":{
+    "title":{"type":"string","description":"The book's title."},
+    "author":{"type":"string","description":"The author, if known, in natural order."},
+    "isFavorite":{"type":"boolean","description":"Whether the member said it is a favourite (they like or love it)."},
+    "bookshareId":{"type":"string","description":"The catalogue id from a search result, if you have it."}},
+   "required":["title","isFavorite"]}},
+ {"name":"remove_book",
+  "description":"Remove a book from the member's books list entirely. Destructive: always say which book you would remove and get an explicit yes from the member in a prior message before calling this. To only take a book off the favourites, use add_book with isFavorite false instead.",
+  "input_schema":{"type":"object","properties":{
+    "title":{"type":"string","description":"The book's title (a partial title is fine if it matches only one book)."}},
+   "required":["title"]}},
  {"name":"rate_book",
   "description":"Set a 1 to 5 star rating on a title in the reading history. Can be done at any time. Search the history first if unsure of the exact title.",
   "input_schema":{"type":"object","properties":{
@@ -124,7 +151,7 @@ const char kToolsJson[] = R"JSON([
   "description":"Get the authors the member has been asked about, including which are favourites.",
   "input_schema":{"type":"object","properties":{}}},
  {"name":"add_preferred_author",
-  "description":"Record an author as one the member likes, and whether they are a favourite. Only call this after actually asking the member.",
+  "description":"Put an author on the member's authors list, and say whether they are a favourite. Call it when the member asks to add an author or says an author is a favourite; it also updates an author already on the list. (Authors of books added to the bookshelf are added automatically.)",
   "input_schema":{"type":"object","properties":{
     "authorName":{"type":"string","description":"The author's name in natural order, e.g. Tom Clancy."},
     "isFavorite":{"type":"boolean","description":"Whether the member said this is a favourite author."}},
@@ -132,6 +159,11 @@ const char kToolsJson[] = R"JSON([
  {"name":"get_preferred_genres",
   "description":"Get the genres the member has agreed to add as preferences.",
   "input_schema":{"type":"object","properties":{}}},
+ {"name":"remove_preferred_author",
+  "description":"Remove an author from the member's preferred authors. Destructive: always say which author you would remove and get an explicit yes from the member in a prior message before calling this.",
+  "input_schema":{"type":"object","properties":{
+    "authorName":{"type":"string","description":"The author's name, as listed in preferredAuthors (natural order, e.g. Tom Clancy)."}},
+   "required":["authorName"]}},
  {"name":"add_preferred_genre",
   "description":"Record a genre as preferred. Only call this after actually asking the member.",
   "input_schema":{"type":"object","properties":{
@@ -409,8 +441,10 @@ std::string tool_add_bookshelf(const Config& c, cJSON* input, bool* is_error) {
     cJSON_AddStringToObject(o, "title", title.c_str());
     cJSON_AddNumberToObject(o, "freeSlotsNow", va::kLoanCap - after.loan_count);
     if (memory::configured(c)) {
-        bool logged = memory::log_added(c, title, author, id) == ESP_OK;
+        bool author_added = false;
+        bool logged = memory::log_added(c, title, author, id, &author_added) == ESP_OK;
         cJSON_AddBoolToObject(o, "loggedToReadingHistory", logged);
+        cJSON_AddBoolToObject(o, "authorAddedToAuthorsList", author_added);
     }
     cJSON_AddBoolToObject(o, "authorAlreadyInPreferredAuthors", info.author_known);
     cJSON_AddItemToObject(o, "currentPreferredGenres", cJSON_Parse(info.genres_json.c_str()));
@@ -538,6 +572,32 @@ std::string memory_tool(const Config& c, const std::string& name, cJSON* input, 
         }
         return ok_or_fail(memory::add_author(c, who, cJSON_IsTrue(fav)), "the author");
     }
+    if (name == "remove_preferred_author") {
+        std::string who = arg(input, "authorName");
+        if (who.empty()) {
+            *is_error = true;
+            return "Missing required argument: authorName";
+        }
+        std::string matched;
+        int matches = 0;
+        esp_err_t e = memory::remove_author(c, who, &matched, &matches);
+        if (e == ESP_ERR_NOT_FOUND) {
+            *is_error = true;
+            return "That author is not in the preferred authors. Call get_preferred_authors to see who is.";
+        }
+        if (e == ESP_ERR_INVALID_SIZE) {
+            *is_error = true;
+            return std::to_string(matches) + " authors match that; ask the member which one.";
+        }
+        if (e != ESP_OK) {
+            *is_error = true;
+            return "Could not save that change.";
+        }
+        cJSON* o = cJSON_CreateObject();
+        cJSON_AddBoolToObject(o, "success", true);
+        cJSON_AddStringToObject(o, "removedAuthor", matched.c_str());
+        return print(o);
+    }
     if (name == "add_preferred_genre") {
         std::string genre = arg(input, "genre");
         if (genre.empty()) {
@@ -545,6 +605,51 @@ std::string memory_tool(const Config& c, const std::string& name, cJSON* input, 
             return "Missing required argument: genre";
         }
         return ok_or_fail(memory::add_genre(c, genre), "the genre");
+    }
+    if (name == "add_book") {
+        std::string title = arg(input, "title");
+        const cJSON* fav = cJSON_GetObjectItemCaseSensitive(input, "isFavorite");
+        if (title.empty() || !cJSON_IsBool(fav)) {
+            *is_error = true;
+            return "Missing required arguments: title and isFavorite";
+        }
+        bool created = false;
+        if (memory::add_book(c, title, arg(input, "author"), arg(input, "bookshareId"), cJSON_IsTrue(fav), &created) != ESP_OK) {
+            *is_error = true;
+            return "Could not save that book.";
+        }
+        cJSON* o = cJSON_CreateObject();
+        cJSON_AddBoolToObject(o, "success", true);
+        cJSON_AddStringToObject(o, "title", title.c_str());
+        cJSON_AddBoolToObject(o, "isFavorite", cJSON_IsTrue(fav));
+        cJSON_AddBoolToObject(o, "newOnList", created);
+        return print(o);
+    }
+    if (name == "remove_book") {
+        std::string title = arg(input, "title");
+        if (title.empty()) {
+            *is_error = true;
+            return "Missing required argument: title";
+        }
+        std::string matched;
+        int matches = 0;
+        esp_err_t e = memory::remove_book(c, title, &matched, &matches);
+        if (e == ESP_ERR_NOT_FOUND) {
+            *is_error = true;
+            return "No book on the list matches that title. Use search_reading_history to check.";
+        }
+        if (e == ESP_ERR_INVALID_SIZE) {
+            *is_error = true;
+            return std::to_string(matches) + " books match that; ask the member which one.";
+        }
+        if (e != ESP_OK) {
+            *is_error = true;
+            return "Could not save that change.";
+        }
+        cJSON* o = cJSON_CreateObject();
+        cJSON_AddBoolToObject(o, "success", true);
+        cJSON_AddStringToObject(o, "removedBook", matched.c_str());
+        return print(o);
     }
     if (name == "rate_book") {
         std::string title = arg(input, "title");
@@ -558,7 +663,7 @@ std::string memory_tool(const Config& c, const std::string& name, cJSON* input, 
         esp_err_t e = memory::rate(c, title, rating->valueint, &matched, &matches);
         if (e == ESP_ERR_NOT_FOUND) {
             *is_error = true;
-            return "No title in the reading history matches that. Use search_reading_history to find it.";
+            return "No title in the reading history matches that. Use search_reading_history to find it, or if the member simply likes this book, use add_book.";
         }
         if (e == ESP_ERR_INVALID_SIZE) {
             *is_error = true;
@@ -580,8 +685,8 @@ std::string memory_tool(const Config& c, const std::string& name, cJSON* input, 
 
 std::string run_tool(const Config& c, const std::string& name, cJSON* input, bool* is_error) {
     if (name == "remember_preference" || name == "recall_preferences" || name == "search_reading_history" ||
-        name == "rate_book" || name == "get_preferred_authors" || name == "add_preferred_author" ||
-        name == "get_preferred_genres" || name == "add_preferred_genre") {
+        name == "rate_book" || name == "add_book" || name == "remove_book" || name == "get_preferred_authors" || name == "add_preferred_author" ||
+        name == "get_preferred_genres" || name == "add_preferred_genre" || name == "remove_preferred_author") {
         return memory_tool(c, name, input, is_error);
     }
     if (name == "add_to_bookshelf") return tool_add_bookshelf(c, input, is_error);
