@@ -20,7 +20,7 @@ constexpr Colour kGreenLow = {0, 18, 0};
 constexpr Colour kBlueLow = {0, 0, 22};
 constexpr Colour kRedLow = {24, 0, 0};
 
-constexpr int kSpinPeriodMs = 1000;  // one lap per second
+constexpr int kSpinPeriodMs = 2000;  // one lap per two seconds (slower hides small Wi-Fi-induced hiccups)
 // The head, then a 3-LED tail of diminishing intensity (share of the head's brightness).
 constexpr float kTrail[] = {1.0f, 0.45f, 0.20f, 0.08f};
 
@@ -68,6 +68,9 @@ void animation_task(void*) {
             int64_t ms = esp_timer_get_time() / 1000;
             int head = static_cast<int>((ms % kSpinPeriodMs) * n / kSpinPeriodMs);
             if (s.serial != drawn || head != last_head) {
+                static int64_t last_draw_ms = 0;
+                if (last_draw_ms && ms - last_draw_ms > 200) ESP_LOGW(TAG, "spinner stalled for %d ms", static_cast<int>(ms - last_draw_ms));
+                last_draw_ms = ms;
                 draw_spinner(s, head);
                 last_head = head;
                 drawn = s.serial;
@@ -86,7 +89,8 @@ void animation_task(void*) {
 namespace leds {
 
 void start() {
-    if (!s_task) xTaskCreate(animation_task, "leds", 3072, nullptr, 3, &s_task);
+    // Priority above the audio and turn tasks, so generating a tone cannot make the spinner stutter.
+    if (!s_task) xTaskCreate(animation_task, "leds", 3072, nullptr, 8, &s_task);
 }
 
 void solid(unsigned char r, unsigned char g, unsigned char b) { set(false, {r, g, b}, "solid"); }

@@ -173,6 +173,7 @@ extern "C" void app_main() {
     // Microphone first: PDM receive needs I2S0 (the speaker is pinned to I2S1 either way).
     if (mic::init() != ESP_OK) ESP_LOGW(TAG, "microphone unavailable");
     if (audio::init() != ESP_OK) ESP_LOGW(TAG, "audio output unavailable");
+    thinking::prepare();
     audio::set_volume(cfg.volume);
 
     // Boot: red, green, blue, then spinning yellow (waiting) until the device is ready for touch-to-talk.

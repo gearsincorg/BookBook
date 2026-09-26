@@ -10,6 +10,9 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESP_WIFI_PS_NONE=y
 CONFIG_SPIRAM_USE_MALLOC=y
 
+# 1 ms scheduler tick: the LED spinner steps every ~83 ms and a 10 ms tick made it visibly uneven.
+CONFIG_FREERTOS_HZ=1000
+
 # TLS buffers in PSRAM. Each secure connection needs two ~16 KB buffers; with the library and Claude
 # connections kept open, the fast internal RAM ran out ("mbedtls_ssl_setup returned -0x7F00", largest free
 # block 15 KB) and speech-to-text could not connect ("I could not reach the speech service").

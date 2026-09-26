@@ -48,7 +48,17 @@ void silence(int ms) {
 }
 
 // Sine with ~50 ms (or a quarter of the note) fades in and out so there are no clicks.
-void tone(float hz, int ms) {
+// Each distinct tone is computed once (about 18 KB in all) and replayed from memory.
+struct Cached {
+    float hz;
+    int ms;
+    std::vector<int16_t> pcm;
+};
+std::vector<Cached> s_cache;
+
+const std::vector<int16_t>& tone_pcm(float hz, int ms) {
+    for (const Cached& c : s_cache)
+        if (c.hz == hz && c.ms == ms) return c.pcm;
     int total = kRate * ms / 1000;
     int fade = std::max(1, std::min(total / 4, kRate / 20));
     std::vector<int16_t> pcm(((total + kBlockSamples - 1) / kBlockSamples) * kBlockSamples, 0);
@@ -58,6 +68,12 @@ void tone(float hz, int ms) {
         else if (i > total - fade) env = static_cast<float>(total - i) / fade;
         pcm[i] = static_cast<int16_t>(kAmplitude * env * sinf(2.0f * 3.14159265f * hz * i / kRate));
     }
+    s_cache.push_back({hz, ms, std::move(pcm)});
+    return s_cache.back().pcm;
+}
+
+void tone(float hz, int ms) {
+    const std::vector<int16_t>& pcm = tone_pcm(hz, ms);
     for (size_t off = 0; off < pcm.size() && !stopping(); off += kBlockSamples) write_block(&pcm[off]);
 }
 
@@ -87,6 +103,16 @@ void task(void*) {
 }  // namespace
 
 namespace thinking {
+
+void prepare() {
+    if (!s_cache.empty()) return;
+    s_cache.reserve(8);  // references handed out by tone_pcm() must stay valid
+    tone_pcm(880.0f, 90);
+    tone_pcm(880.0f, 120);
+    for (const auto& pattern : kPatterns)
+        for (const Note& n : pattern)
+            if (n.ms > 0) tone_pcm(n.hz, n.ms);
+}
 
 void start() {
     if (s_task) return;
