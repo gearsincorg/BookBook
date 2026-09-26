@@ -59,10 +59,7 @@ struct Turn {
     std::string spoken;  // what to say back
 };
 
-static void turn_task(void* arg) {
-    auto* holder = static_cast<std::shared_ptr<Turn>*>(arg);
-    std::shared_ptr<Turn> t = *holder;
-    delete holder;
+static void run_turn(const std::shared_ptr<Turn>& t) {
     const Config& c = t->cfg;
 
     mic::Stats stats;
@@ -93,6 +90,17 @@ static void turn_task(void* arg) {
         }
     }
     t->done = true;
+}
+
+// vTaskDelete never returns, so nothing still alive in this function would ever be destroyed: the turn (with its
+// 480 KB recording) has to be released in an inner scope, before the task deletes itself.
+static void turn_task(void* arg) {
+    {
+        auto* holder = static_cast<std::shared_ptr<Turn>*>(arg);
+        std::shared_ptr<Turn> t = *holder;
+        delete holder;
+        run_turn(t);
+    }
     vTaskDelete(nullptr);
 }
 
@@ -179,10 +187,12 @@ static void warmup_task(void* arg) {
                  esp_err_to_name(va::ensure_logged_in(cfg.va_user, cfg.va_password, &why)));
     }
     // Last, so it does not compete with the connections above. Silent: only the ready light shows the result.
-    ota::Info update;
-    if (ota::check(cfg, update) == ESP_OK && update.available) {
-        s_update_available = true;
-        s_update_led_dirty = true;
+    {
+        ota::Info update;  // scoped: vTaskDelete below never returns, so it would not be destroyed
+        if (ota::check(cfg, update) == ESP_OK && update.available) {
+            s_update_available = true;
+            s_update_led_dirty = true;
+        }
     }
     ESP_LOGI(TAG, "warm-up finished in %d ms", static_cast<int>((esp_timer_get_time() - t0) / 1000));
     vTaskDelete(nullptr);

@@ -72,6 +72,18 @@ static void append_escaped(std::string& out, const char* text) {
 constexpr size_t kTtsBufferBytes = 384 * 1024;  // 12 s at 16 kHz mono 16-bit
 constexpr size_t kTtsPrebufferBytes = 48 * 1024;  // 1.5 s
 
+// Frees a buffer made by xStreamBufferCreateWithCaps. Plain vStreamBufferDelete leaves its two allocations behind
+// (384 KB leaked per reply), and IDF 5.5's vStreamBufferDeleteWithCaps deletes the buffer with a queue call and
+// corrupts the heap (assert "block already marked as free"), so do it by hand.
+static void delete_tts_buffer(StreamBufferHandle_t buffer) {
+    uint8_t* storage = nullptr;
+    StaticStreamBuffer_t* control = nullptr;
+    if (xStreamBufferGetStaticBuffers(buffer, &storage, &control) != pdTRUE) return;
+    vStreamBufferDelete(buffer);  // static buffers: this only detaches, it frees nothing
+    heap_caps_free(control);
+    heap_caps_free(storage);
+}
+
 struct TtsPlayback {
     StreamBufferHandle_t buffer = nullptr;
     SemaphoreHandle_t finished = nullptr;
@@ -165,7 +177,7 @@ esp_err_t speak(const char* region, const char* key, const char* text, bool (*ca
     play.finished = xSemaphoreCreateBinary();
     if (xTaskCreate(tts_player_task, "tts_play", 6144, &play, 5, nullptr) != pdPASS) {
         vSemaphoreDelete(play.finished);
-        vStreamBufferDelete(play.buffer);
+        delete_tts_buffer(play.buffer);
         esp_http_client_cleanup(client);
         return ESP_ERR_NO_MEM;
     }
@@ -206,13 +218,16 @@ esp_err_t speak(const char* region, const char* key, const char* text, bool (*ca
     }
     int64_t downloaded_ms = (esp_timer_get_time() - t0) / 1000;
     play.done = true;  // no more audio is coming; the player drains the buffer and finishes
-    xSemaphoreTake(play.finished, portMAX_DELAY);
+    // The download is usually far ahead of the speaker, so a touch has to be noticed here, while the buffer drains.
+    while (xSemaphoreTake(play.finished, pdMS_TO_TICKS(20)) != pdTRUE) {
+        if (cancel && cancel()) play.stop = true;  // the player stops at its next read and gives `finished`
+    }
     ESP_LOGI(TAG, "tts done: %u bytes (%u ms audio), downloaded in %d ms, %d ms total, %d underruns",
              static_cast<unsigned>(total), static_cast<unsigned>(total / 2 * 1000 / audio::kSampleRateHz),
              static_cast<int>(downloaded_ms), static_cast<int>((esp_timer_get_time() - t0) / 1000), play.underruns);
     esp_err_t result = play.failed ? ESP_FAIL : err;
     vSemaphoreDelete(play.finished);
-    vStreamBufferDelete(play.buffer);
+    delete_tts_buffer(play.buffer);
     esp_http_client_cleanup(client);
     return total > 0 ? result : ESP_FAIL;
 }

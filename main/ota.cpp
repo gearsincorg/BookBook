@@ -199,8 +199,16 @@ BootReport take_boot_report() {
     BootReport report = BootReport::None;
     if (nvs_get_str(nvs, kExpectKey, expected, &len) == ESP_OK) {
         report = running_sha256() == expected ? BootReport::Updated : BootReport::RolledBack;
-        nvs_erase_key(nvs, kExpectKey);
-        nvs_commit(nvs);
+        // Keep the note while the new image is still on probation (until mark_valid): if it crashes before then the
+        // bootloader goes back to the old image, which finds the note and reports the failure.
+        esp_ota_img_states_t state;
+        bool probation = report == BootReport::Updated &&
+                         esp_ota_get_state_partition(esp_ota_get_running_partition(), &state) == ESP_OK &&
+                         state == ESP_OTA_IMG_PENDING_VERIFY;
+        if (!probation) {
+            nvs_erase_key(nvs, kExpectKey);
+            nvs_commit(nvs);
+        }
         ESP_LOGI(TAG, "last update: %s", report == BootReport::Updated ? "installed" : "rolled back");
     }
     nvs_close(nvs);
@@ -213,6 +221,12 @@ void mark_valid() {
         state == ESP_OTA_IMG_PENDING_VERIFY) {
         ESP_LOGI(TAG, "new image is running well: cancelling rollback");
         esp_ota_mark_app_valid_cancel_rollback();
+        nvs_handle_t nvs;  // the update is confirmed: forget the note
+        if (nvs_open(kNvsNamespace, NVS_READWRITE, &nvs) == ESP_OK) {
+            nvs_erase_key(nvs, kExpectKey);
+            nvs_commit(nvs);
+            nvs_close(nvs);
+        }
     }
 }
 

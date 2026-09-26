@@ -33,8 +33,10 @@ bool install_requested();
 esp_err_t install(const Config& cfg, std::string* why);
 
 // What happened to the last install, known only after the restart: the installer notes the hash it expects
-// before restarting, and the next boot compares it with what is actually running. Reported once (the note is
-// erased): Updated when the new image is running, RolledBack when the bootloader went back to the old one.
+// before restarting, and the next boot compares it with what is actually running: Updated when the new image is
+// running, RolledBack when the bootloader went back to the old one. The note is erased once reported, except
+// that a new image keeps it until mark_valid(): if it crashes first, the old image it rolls back to reports the
+// failure.
 enum class BootReport { None, Updated, RolledBack };
 BootReport take_boot_report();
 
