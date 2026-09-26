@@ -16,6 +16,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "va.h"
 
 static const char* TAG = "memory";
@@ -87,6 +88,18 @@ esp_err_t http(const std::string& url, esp_http_client_method_t method, const st
     return err;
 }
 
+// GET with one retry on a transport error (a dropped connection or timeout on a weak link).
+esp_err_t http_get(const std::string& url, Response& out, const std::string& if_none_match = "") {
+    esp_err_t err = http(url, HTTP_METHOD_GET, nullptr, "", false, out, if_none_match);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "read failed (%s): retrying once", esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(300));
+        out = Response();
+        err = http(url, HTTP_METHOD_GET, nullptr, "", false, out, if_none_match);
+    }
+    return err;
+}
+
 cJSON* new_doc() {
     cJSON* d = cJSON_CreateObject();
     cJSON_AddItemToObject(d, "ExplicitPreferences", cJSON_CreateArray());
@@ -148,7 +161,7 @@ std::string print(cJSON* j, bool take = true) {
 esp_err_t load_locked(const Config& c) {
     if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
     Response r;
-    esp_err_t err = http(c.memory_url, HTTP_METHOD_GET, nullptr, "", false, r);
+    esp_err_t err = http_get(c.memory_url, r);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "load failed: %s", esp_err_to_name(err));
         return err;
@@ -250,7 +263,7 @@ cJSON* standby_books() {
 esp_err_t standby_load_locked(const Config& c) {
     if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
     Response r;
-    esp_err_t err = http(blob_url(c.memory_url, "standby.json"), HTTP_METHOD_GET, nullptr, "", false, r);
+    esp_err_t err = http_get(blob_url(c.memory_url, "standby.json"), r);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "standby load failed: %s", esp_err_to_name(err));
         return err;
@@ -328,7 +341,7 @@ bool configured(const Config& c) { return !c.memory_url.empty(); }
 // Replace `doc` with a fresh copy of `url` if it changed (conditional read). Returns ESP_OK if unchanged or updated.
 static esp_err_t refresh_blob(const std::string& url, std::string& etag, cJSON*& doc, bool make_root_if_missing) {
     Response r;
-    esp_err_t err = http(url, HTTP_METHOD_GET, nullptr, "", false, r, etag);
+    esp_err_t err = http_get(url, r, etag);
     if (err != ESP_OK) return err;
     if (r.status == 304) return ESP_OK;  // unchanged
     if (r.status == 200) {
@@ -406,7 +419,7 @@ std::string prompt_snapshot() {
     }
     cJSON_AddItemToObject(o, "preferredGenres", cJSON_Duplicate(arr("PreferredGenres"), true));
     if (s_standby_loaded) {  // the member's save-for-later list (titles only; get_standby_list has the detail)
-        cJSON* sb = cJSON_AddArrayToObject(o, "standbyList");
+        cJSON* sb = cJSON_AddArrayToObject(o, "onHoldList");
         const cJSON* s;
         int shown = 0;
         cJSON_ArrayForEach(s, standby_books()) {

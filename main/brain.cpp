@@ -59,8 +59,8 @@ const char kSystemPrompt[] =
     "message.\n"
     "11. When adding to the bookshelf, use a format from that title's formats list, preferring "
     "DAISY_Audio_Human, otherwise another audio format. If the bookshelf is full (no free slots), suggest "
-    "saving the title on the standby list, or alternatively adding it to the library's request list (which "
-    "queues it with the library).\n"
+    "putting the title On Hold, or alternatively adding it to the library's request list (which queues it "
+    "with the library).\n"
     "13. Use remember_preference whenever the member states a preference outside a normal search (favourite "
     "genres or authors, formats, things to avoid), and recall_preferences when it would help answer. What you "
     "already remember is listed below the rules.\n"
@@ -92,20 +92,24 @@ const char kSystemPrompt[] =
     "already know, that is fine.\n"
     "20. When the member asks what they have been reading lately or what kind of books they like, answer "
     "conversationally from the profile (favourite authors, a couple of favourites) rather than listing titles.\n"
-    "21. There is a standby list: the member's own save-for-later list, kept by you, separate from the "
-    "library's request list. When the member has found a book or series they want but has not said what to do "
-    "with it, offer the choice in one short question: put it on the bookshelf now, or save it on the standby "
-    "list for later. 'Add it' means the bookshelf; 'save it', 'for later' or 'standby' means add_to_standby, "
-    "which needs no confirmation. Every book is its own entry: when asked to save several books, or all the "
-    "books in a series, add each book separately (all in one add_to_standby call, using the books list, in "
-    "reading order from your own knowledge), never as one entry with the titles in a note. A series is saved as "
-    "a single entry only if the member explicitly asks for the series as one item.\n"
-    "22. To move something from the standby list to the bookshelf, use add_to_bookshelf (find its id and a "
-    "format with search_library if the entry has no id). That removes the standby entry by itself; if the entry "
-    "is a series or is titled differently, pass standbyEntry, and pass keepOnStandby only if the member wants "
-    "it kept on standby too. 'What is on my standby list' is answered with get_standby_list.\n"
-    "23. When the member asks to delete something from the standby list, just do it with remove_from_standby, "
-    "with no confirmation, and say which entry you removed. If several entries match, ask which one.\n"
+    "21. There is an On Hold list: the member's own put-it-aside list, kept by you, separate from the "
+    "library's request list. Books that will not fit on the bookshelf go On Hold. When the member has found a "
+    "book or series they want but has not said what to do with it, offer the choice in one short question: put "
+    "it on the bookshelf now, or put it On Hold. 'Add it' means the bookshelf; 'hold it', 'put it on hold', "
+    "'save it' or 'for later' means add_to_on_hold, which needs no confirmation. Always call it the On Hold "
+    "list when you speak, and never say 'standby'. Every book is its own entry: when asked to put several "
+    "books, or all the books in a series, On Hold, add each book separately (all in one add_to_on_hold call, "
+    "using the books list, in reading order from your own knowledge), never as one entry with the titles in a "
+    "note. A series is one entry only if the member explicitly asks for the series as one item.\n"
+    "22. There are two ways to take a book off hold, and the member chooses: move it to the bookshelf (use "
+    "add_to_bookshelf, finding its id and a format with search_library if the entry has no id; that takes it "
+    "off hold by itself; if the entry is a series or is titled differently pass holdEntry, and pass keepOnHold "
+    "only if the member wants it kept on hold too), or just delete it (remove_from_on_hold). Taking a book "
+    "off hold does NOT mean deleting it: if the member only says something like 'take it off hold', 'release "
+    "it' or 'un-hold it', do nothing yet and ask in one short question whether to put it on the bookshelf or "
+    "just delete it. 'What books do I have on hold' is answered with get_on_hold_list.\n"
+    "23. Deleting something from the On Hold list needs no confirmation: do it with remove_from_on_hold and say "
+    "which book you removed. If several entries match, ask which one.\n"
     "12. If a tool result says dryRun, the change was only pretended (practice mode). Tell the member it was a "
     "practice run and that nothing on their real library account changed.\n";
 
@@ -126,8 +130,8 @@ const char kToolsJson[] = R"JSON([
     "format":{"type":"string","description":"A formatId from the search result's formats list, e.g. DAISY_Audio_Human."},
     "title":{"type":"string","description":"The title, from the search result."},
     "author":{"type":"string","description":"The author, from the search result, if known."},
-    "standbyEntry":{"type":"string","description":"If this book is being moved off the standby list under a different title (for example a series), that entry's title. Otherwise omit."},
-    "keepOnStandby":{"type":"boolean","description":"True only if the member wants it to stay on the standby list too. Normally omit: the standby entry is removed when the book goes on the bookshelf."},
+    "holdEntry":{"type":"string","description":"If this book is being moved off the On Hold list under a different title (for example a series), that entry's title. Otherwise omit."},
+    "keepOnHold":{"type":"boolean","description":"True only if the member wants it to stay On Hold too. Normally omit: it is taken off hold when the book goes on the bookshelf."},
     "type":{"type":"string","enum":["book","music","periodical"],"description":"Defaults to book."}},
    "required":["bookshareId","format","title"]}},
  {"name":"remove_from_bookshelf",
@@ -198,8 +202,8 @@ const char kToolsJson[] = R"JSON([
  {"name":"get_reading_profile",
   "description":"Get a summary of the member's taste: their most frequent authors, favourite authors and books, what is on the bookshelf now, and their books list. Use it to ground 'what should I read next' and 'something like X' requests, to recognise books they already have or have read so they are not suggested again, and to answer 'what have I been reading lately?'.",
   "input_schema":{"type":"object","properties":{}}},
- {"name":"add_to_standby",
-  "description":"Save books on the member's standby list: their own save-for-later list, an alternative to putting them on the bookshelf now. It is separate from the library's request list (which really queues a title with the library). Do this straight away when asked; no confirmation needed. EVERY BOOK IS ITS OWN ENTRY, so each can later be moved to the bookshelf or deleted on its own: if the member asks for several books, or all the books in a series, pass them all in `books`, one item per book, listing them in reading order from your own knowledge of the series. Do not squeeze a list of titles into one entry's note. Only save a series as a single entry if the member explicitly asks for the series as one item.",
+ {"name":"add_to_on_hold",
+  "description":"Put books On Hold: the member's own put-it-aside list, for books they want but cannot fit on the bookshelf right now, or want to save for later. It is separate from the library's request list (which really queues a title with the library). Do this straight away when asked; no confirmation needed. EVERY BOOK IS ITS OWN ENTRY, so each can later be moved to the bookshelf or deleted on its own: if the member asks for several books, or all the books in a series, pass them all in `books`, one item per book, listing them in reading order from your own knowledge of the series. Do not squeeze a list of titles into one entry's note. Only save a series as a single entry if the member explicitly asks for the series as one item.",
   "input_schema":{"type":"object","properties":{
     "books":{"type":"array","description":"Several books in one call (preferred when there is more than one).","items":{"type":"object","properties":{
       "title":{"type":"string","description":"One book's title."},
@@ -211,11 +215,11 @@ const char kToolsJson[] = R"JSON([
     "author":{"type":"string","description":"For a single book: the author, in natural order."},
     "bookshareId":{"type":"string","description":"For a single book: the catalogue id, if you have it."},
     "note":{"type":"string","description":"For a single book: a short note."}}}},
- {"name":"get_standby_list",
-  "description":"Get everything on the member's standby (save-for-later) list.",
+ {"name":"get_on_hold_list",
+  "description":"Get everything on the member's On Hold list.",
   "input_schema":{"type":"object","properties":{}}},
- {"name":"remove_from_standby",
-  "description":"Delete an entry from the standby list without putting it on the bookshelf. Do this straight away when asked; no confirmation is needed for this list. (When a book moves to the bookshelf, add_to_bookshelf removes its standby entry by itself.)",
+ {"name":"remove_from_on_hold",
+  "description":"Delete an entry from the On Hold list without putting it on the bookshelf. Call it only when the member clearly says to delete, remove or forget the book (or answers 'just delete it' to your question); no further confirmation is needed. 'Take it off hold', 'release it' or 'un-hold it' do NOT say what to do with the book: ask first whether to put it on the bookshelf or just delete it. (When a book moves to the bookshelf, add_to_bookshelf takes it off hold by itself.)",
   "input_schema":{"type":"object","properties":{
     "title":{"type":"string","description":"The entry's title (a partial title is fine if it matches only one entry)."}},
    "required":["title"]}},
@@ -446,8 +450,8 @@ std::string dry_run_result(const char* action, const std::string& title) {
 std::string tool_add_bookshelf(const Config& c, cJSON* input, bool* is_error) {
     std::string id = arg(input, "bookshareId"), format = arg(input, "format"), title = arg(input, "title");
     std::string author = va::natural_author(arg(input, "author"));
-    const bool keep_on_standby = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(input, "keepOnStandby"));
-    const std::string standby_entry = arg(input, "standbyEntry");
+    const bool keep_on_standby = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(input, "keepOnHold"));
+    const std::string standby_entry = arg(input, "holdEntry");
     std::string type = arg(input, "type");
     if (type.empty()) type = "book";
     if (id.empty() || format.empty()) {
@@ -466,7 +470,7 @@ std::string tool_add_bookshelf(const Config& c, cJSON* input, bool* is_error) {
     // Check the 20-slot cap ourselves rather than letting the portal reject it silently.
     if (type != "periodical" && before.loan_count >= va::kLoanCap) {
         *is_error = true;
-        return "The bookshelf is full (20 of 20 loan slots used). Suggest saving it on the standby list instead, or adding it to the request list.";
+        return "The bookshelf is full (20 of 20 loan slots used). Suggest putting it On Hold instead, or adding it to the request list.";
     }
     for (const auto& b : before.books) {
         if (b.bookshare_id == id) {
@@ -512,7 +516,7 @@ std::string tool_add_bookshelf(const Config& c, cJSON* input, bool* is_error) {
         if (!keep_on_standby) {
             std::string taken;
             if (memory::standby_take(c, id, title, standby_entry, &taken) == ESP_OK && !taken.empty()) {
-                cJSON_AddStringToObject(o, "removedFromStandby", taken.c_str());
+                cJSON_AddStringToObject(o, "removedFromOnHold", taken.c_str());
             }
         }
     }
@@ -630,7 +634,7 @@ std::string memory_tool(const Config& c, const std::string& name, cJSON* input, 
         }
         return ok_or_fail(memory::remember(c, note), "the note");
     }
-    if (name == "add_to_standby") {
+    if (name == "add_to_on_hold") {
         std::vector<memory::StandbyEntry> entries;
         const cJSON* many = cJSON_GetObjectItemCaseSensitive(input, "books");
         if (cJSON_IsArray(many)) {
@@ -653,23 +657,23 @@ std::string memory_tool(const Config& c, const std::string& name, cJSON* input, 
         int created = 0, updated = 0;
         if (memory::standby_add_many(c, entries, &created, &updated) != ESP_OK) {
             *is_error = true;
-            return "Could not save to the standby list.";
+            return "Could not save to the On Hold list.";
         }
         cJSON* o = cJSON_CreateObject();
         cJSON_AddBoolToObject(o, "success", true);
-        cJSON_AddNumberToObject(o, "newOnStandby", created);
-        cJSON_AddNumberToObject(o, "alreadyOnStandby", updated);
+        cJSON_AddNumberToObject(o, "newOnHold", created);
+        cJSON_AddNumberToObject(o, "alreadyOnHold", updated);
         return print(o);
     }
-    if (name == "get_standby_list") {
+    if (name == "get_on_hold_list") {
         std::string json;
         if (memory::standby_list(c, &json) != ESP_OK) {
             *is_error = true;
-            return "Could not read the standby list.";
+            return "Could not read the On Hold list.";
         }
         return json;
     }
-    if (name == "remove_from_standby") {
+    if (name == "remove_from_on_hold") {
         std::string title = arg(input, "title");
         if (title.empty()) {
             *is_error = true;
@@ -680,7 +684,7 @@ std::string memory_tool(const Config& c, const std::string& name, cJSON* input, 
         esp_err_t e = memory::standby_remove(c, title, &matched, &matches);
         if (e == ESP_ERR_NOT_FOUND) {
             *is_error = true;
-            return "Nothing on the standby list matches that. Call get_standby_list to see what is there.";
+            return "Nothing on the On Hold list matches that. Call get_on_hold_list to see what is there.";
         }
         if (e == ESP_ERR_INVALID_SIZE) {
             *is_error = true;
@@ -821,8 +825,8 @@ std::string memory_tool(const Config& c, const std::string& name, cJSON* input, 
 
 std::string run_tool(const Config& c, const std::string& name, cJSON* input, bool* is_error) {
     if (name == "remember_preference" || name == "recall_preferences" || name == "search_reading_history" ||
-        name == "rate_book" || name == "add_book" || name == "remove_book" || name == "add_to_standby" ||
-        name == "get_standby_list" || name == "remove_from_standby" || name == "get_preferred_authors" || name == "add_preferred_author" ||
+        name == "rate_book" || name == "add_book" || name == "remove_book" || name == "add_to_on_hold" ||
+        name == "get_on_hold_list" || name == "remove_from_on_hold" || name == "get_preferred_authors" || name == "add_preferred_author" ||
         name == "get_preferred_genres" || name == "add_preferred_genre" || name == "remove_preferred_author") {
         return memory_tool(c, name, input, is_error);
     }

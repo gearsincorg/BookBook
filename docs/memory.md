@@ -23,20 +23,20 @@ some of which are favourites.**
 | Duplicates | none: matched by catalogue id, else exact title. Adding to the bookshelf a book that is already listed (for example a favourite added earlier, or one borrowed before) reuses its entry with a fresh add date, no remove date, and its rating kept |
 | Dates | set when the book goes on / comes off the bookshelf; a favourite that was never borrowed has neither |
 
-## Standby list (`standby.json`)
+## On Hold list (stored in `standby.json`)
 
-BookBook's own **save for later** list: an alternative to putting a found book or series on the bookshelf. It is
+BookBook's own **On Hold** list: the put-it-aside list for books that will not fit on the bookshelf, or that the member is saving for later: an alternative to putting a found book or series on the bookshelf. It is
 separate from the library's request list, which really queues the title with the library and moves it to the
-bookshelf by itself when a slot frees up; the standby list does nothing on the library's side.
+bookshelf by itself when a slot frees up; the On Hold list does nothing on the library's side.
 
 | | |
 |---|---|
-| Gets on the list | the member asks (`add_to_standby`): a single book, or a series under its series name with a note. When the member has found something but not said what to do with it, the assistant offers the choice: bookshelf now, or standby. When the bookshelf is full (20 of 20), standby is the first thing it suggests, then the request list |
-| Reading it | `get_standby_list` ("what's on my standby list"); the titles are also in the assistant's system prompt |
-| Moving to the bookshelf | `add_to_bookshelf`, which **removes the standby entry by itself** (matched by catalogue id, else exact title; `standbyEntry` names the entry when the title differs, for example a series; `keepOnStandby` true keeps it) |
-| Removal | `remove_from_standby`, **no verification**: it is the member's own scratch list |
+| Gets on the list | the member asks (`add_to_on_hold`): a single book, or a series under its series name with a note. When the member has found something but not said what to do with it, the assistant offers the choice: bookshelf now, or On Hold. When the bookshelf is full (20 of 20), On Hold is the first thing it suggests, then the request list |
+| Reading it | `get_on_hold_list` ("what's on my On Hold list"); the titles are also in the assistant's system prompt |
+| Moving to the bookshelf | `add_to_bookshelf`, which **removes the standby entry by itself** (matched by catalogue id, else exact title; `holdEntry` names the entry when the title differs, for example a series; `keepOnHold` true keeps it) |
+| Taking a book off hold | two choices, the member picks: move it to the bookshelf (above), or just delete it (`remove_from_on_hold`, **no verification**: it is the member's own list). "Take it off hold" on its own is a question, not a delete: the assistant asks which one |
 | Duplicates | none (catalogue id, else exact title) |
-| Storage | its **own blob** in the same container. Bookworm rewrites `memory.json` from its own model and would silently drop a field it does not know, so the list is kept out of that file. Once Bookworm is retired or updated, it could be folded into `memory.json` |
+| Storage | its **own blob** in the same container (the file keeps its original name, `standby.json`, from before the list was renamed). Bookworm rewrites `memory.json` from its own model and would silently drop a field it does not know, so the list is kept out of that file. Once Bookworm is retired or updated, it could be folded into `memory.json` |
 
 ## Other memory
 
@@ -53,7 +53,7 @@ Free-text preferences (`remember_preference`), preferred genres (`add_preferred_
 - **The board's copy is refreshed when something else may have changed the files** (another BookBook, or
   Bookworm): at the start of a new conversation and before any memory tool reads. It is a conditional read
   (`If-None-Match`), so it is cheap when nothing changed, and skipped if it already checked in the last 20 s.
-- **Each book on the standby list is its own entry.** Asking for "all the Bond books" adds each book separately,
+- **Each book on the On Hold list is its own entry.** Asking for "all the Bond books" adds each book separately,
   in one save, in reading order; a series is one entry only if the member asks for it as one item.
 
 ## What the assistant sees

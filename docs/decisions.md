@@ -108,7 +108,7 @@ Bookworm was the **development version** of BookBook. It will either be retired 
 standard. BookBook is the reference now: where the two differ, BookBook's behaviour wins, and compatibility with
 Bookworm's file format is a convenience, not a requirement. Some choices made only to stay compatible could be
 revisited once Bookworm is retired or updated: a favourite book is a rating of 4 or 5 (there is no separate flag,
-and favourites that were never borrowed have no dates), and the standby list lives in its own blob
+and favourites that were never borrowed have no dates), and the On Hold list lives in its own blob
 (`standby.json`) instead of inside `memory.json`.
 
 BookBook additions on top of Bookworm's design: practice mode; the standby (save-for-later) list; the authors and

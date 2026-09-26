@@ -303,7 +303,7 @@ static esp_err_t h_test_memory(httpd_req_t* req) {
     if (!wifi::connected()) return send_error(req, "409 Conflict", "Not on the internet yet: save Wi-Fi and restart first");
     Config c = config::get();
     if (!memory::configured(c)) return send_error(req, "409 Conflict", "No memory storage URL in this build");
-    if (memory::load(c) != ESP_OK) return send_error(req, "502 Bad Gateway", "Could not read the memory file; its token may have expired");
+    if (memory::load(c) != ESP_OK) return send_error(req, "502 Bad Gateway", "Could not read the memory file: a network problem, or its token has expired");
     memory::Counts n = memory::counts();
     cJSON* o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", true);
