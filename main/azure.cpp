@@ -1,5 +1,6 @@
 #include "azure.h"
 
+#include <atomic>
 #include <cstdio>
 #include <string>
 
@@ -12,6 +13,8 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 
 static const char* TAG = "azure";
@@ -64,6 +67,50 @@ static void append_escaped(std::string& out, const char* text) {
     }
 }
 
+// Speech playback: the download loop fills `buffer`, this task plays it. It waits for about 1.5 s of
+// audio before starting, so ordinary network jitter never reaches the speaker.
+constexpr size_t kTtsBufferBytes = 384 * 1024;  // 12 s at 16 kHz mono 16-bit
+constexpr size_t kTtsPrebufferBytes = 48 * 1024;  // 1.5 s
+
+struct TtsPlayback {
+    StreamBufferHandle_t buffer = nullptr;
+    SemaphoreHandle_t finished = nullptr;
+    std::atomic<bool> done{false};    // the download has ended
+    std::atomic<bool> stop{false};    // cancelled: drop what is left
+    std::atomic<bool> failed{false};
+    int underruns = 0;
+};
+
+static void tts_player_task(void* arg) {
+    TtsPlayback* p = static_cast<TtsPlayback*>(arg);
+    while (!p->done && !p->stop && xStreamBufferBytesAvailable(p->buffer) < kTtsPrebufferBytes)
+        vTaskDelay(pdMS_TO_TICKS(20));
+    if (!p->stop && xStreamBufferBytesAvailable(p->buffer) > 0) {
+        if (audio::begin() != ESP_OK) {
+            p->failed = true;
+            p->stop = true;
+        } else {
+            uint8_t chunk[2048];
+            while (!p->stop) {
+                size_t n = xStreamBufferReceive(p->buffer, chunk, sizeof(chunk), pdMS_TO_TICKS(100));
+                if (n > 0) {
+                    if (audio::write(chunk, n) != ESP_OK) {
+                        p->failed = true;
+                        p->stop = true;
+                    }
+                } else if (p->done && xStreamBufferBytesAvailable(p->buffer) == 0) {
+                    break;
+                } else if (!p->done) {
+                    p->underruns++;  // the download fell behind the speaker
+                }
+            }
+            audio::end();
+        }
+    }
+    xSemaphoreGive(p->finished);
+    vTaskDelete(nullptr);
+}
+
 esp_err_t speak(const char* region, const char* key, const char* text, bool (*cancel)()) {
     constexpr const char* kVoice = "en-AU-NatashaNeural";
     std::string ssml = "<speak version='1.0' xml:lang='en-AU'><voice name='";
@@ -106,11 +153,28 @@ esp_err_t speak(const char* region, const char* key, const char* text, bool (*ca
         return ESP_FAIL;
     }
 
+    // Download and playback are decoupled by a large buffer in PSRAM (12 s of audio). Playing straight from
+    // the network left only the 240 ms I2S cushion, so any network stall in a long reply became a gap.
+    TtsPlayback play;
+    play.buffer = xStreamBufferCreateWithCaps(kTtsBufferBytes, 1, MALLOC_CAP_SPIRAM);
+    if (!play.buffer) {
+        ESP_LOGE(TAG, "tts: no memory for the audio buffer");
+        esp_http_client_cleanup(client);
+        return ESP_ERR_NO_MEM;
+    }
+    play.finished = xSemaphoreCreateBinary();
+    if (xTaskCreate(tts_player_task, "tts_play", 6144, &play, 5, nullptr) != pdPASS) {
+        vSemaphoreDelete(play.finished);
+        vStreamBufferDelete(play.buffer);
+        esp_http_client_cleanup(client);
+        return ESP_ERR_NO_MEM;
+    }
+
     uint8_t buf[2048];
     size_t total = 0;
-    bool started = false;
+    bool first = true;
     int carry = -1;  // odd trailing byte from the previous read
-    while (true) {
+    while (!play.stop) {
         int off = 0;
         if (carry >= 0) {
             buf[0] = static_cast<uint8_t>(carry);
@@ -121,6 +185,7 @@ esp_err_t speak(const char* region, const char* key, const char* text, bool (*ca
         if (n <= 0) break;
         if (cancel && cancel()) {
             ESP_LOGI(TAG, "tts cancelled");
+            play.stop = true;
             break;
         }
         n += off;
@@ -128,26 +193,28 @@ esp_err_t speak(const char* region, const char* key, const char* text, bool (*ca
             carry = buf[n - 1];
             n--;
         }
-        if (!started) {
+        if (first) {
             ESP_LOGI(TAG, "tts first audio after %d ms", static_cast<int>((esp_timer_get_time() - t0) / 1000));
-            if (audio::begin() != ESP_OK) {
-                err = ESP_FAIL;
-                break;
-            }
-            started = true;
+            first = false;
         }
-        if (audio::write(buf, n) != ESP_OK) {
-            err = ESP_FAIL;
-            break;
+        size_t sent = 0;
+        while (sent < static_cast<size_t>(n) && !play.stop) {  // blocks while the buffer is full
+            sent += xStreamBufferSend(play.buffer, buf + sent, n - sent, pdMS_TO_TICKS(100));
+            if (cancel && cancel()) play.stop = true;
         }
-        total += n;
+        total += sent;
     }
-    if (started) audio::end();
-    ESP_LOGI(TAG, "tts done: %u bytes (%u ms audio), %d ms total", static_cast<unsigned>(total),
-             static_cast<unsigned>(total / 2 * 1000 / audio::kSampleRateHz),
-             static_cast<int>((esp_timer_get_time() - t0) / 1000));
+    int64_t downloaded_ms = (esp_timer_get_time() - t0) / 1000;
+    play.done = true;  // no more audio is coming; the player drains the buffer and finishes
+    xSemaphoreTake(play.finished, portMAX_DELAY);
+    ESP_LOGI(TAG, "tts done: %u bytes (%u ms audio), downloaded in %d ms, %d ms total, %d underruns",
+             static_cast<unsigned>(total), static_cast<unsigned>(total / 2 * 1000 / audio::kSampleRateHz),
+             static_cast<int>(downloaded_ms), static_cast<int>((esp_timer_get_time() - t0) / 1000), play.underruns);
+    esp_err_t result = play.failed ? ESP_FAIL : err;
+    vSemaphoreDelete(play.finished);
+    vStreamBufferDelete(play.buffer);
     esp_http_client_cleanup(client);
-    return total > 0 ? err : ESP_FAIL;
+    return total > 0 ? result : ESP_FAIL;
 }
 
 static esp_err_t transcribe_once(const char* region, const char* key, const int16_t* pcm, size_t samples,
