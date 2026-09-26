@@ -43,6 +43,19 @@ bookshelf by itself when a slot frees up; the standby list does nothing on the l
 Free-text preferences (`remember_preference`), preferred genres (`add_preferred_genre`) and star ratings
 (`rate_book`) can be added but not yet removed. Genres are added only after the member agrees.
 
+## Reliability
+
+- **A save that fails on the way back is not reported as failed if it went through.** Saves are guarded by the
+  blob's ETag. When one fails (the board has seen `ESP_ERR_HTTP_EAGAIN`, a timeout waiting for the answer, on a
+  write that had in fact been stored), the stored copy is re-read and the change re-applied to it: if that
+  changes nothing, the write had succeeded and the save counts as done; otherwise it is written again (up to 3
+  tries). Every memory change is written to be repeatable for this reason.
+- **The board's copy is refreshed when something else may have changed the files** (another BookBook, or
+  Bookworm): at the start of a new conversation and before any memory tool reads. It is a conditional read
+  (`If-None-Match`), so it is cheap when nothing changed, and skipped if it already checked in the last 20 s.
+- **Each book on the standby list is its own entry.** Asking for "all the Bond books" adds each book separately,
+  in one save, in reading order; a series is one entry only if the member asks for it as one item.
+
 ## What the assistant sees
 
 Everything except the reading history goes into the system prompt on every request, plus the favourite books

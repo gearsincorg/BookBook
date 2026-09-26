@@ -13,6 +13,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "va.h"
@@ -35,6 +36,7 @@ struct Lock {
 cJSON* s_doc;        // the memory document (owned)
 std::string s_etag;  // ETag of the version we last read or wrote (with quotes, as Azure sends it)
 bool s_loaded;
+int64_t s_last_sync_us;  // when either blob was last read or saved (see refresh())
 
 struct Response {
     int status = 0;
@@ -55,7 +57,8 @@ esp_err_t on_event(esp_http_client_event_t* e) {
 
 // One request to the blob's SAS URL. `if_match` / `if_none_match` are optional preconditions.
 esp_err_t http(const std::string& url, esp_http_client_method_t method, const std::string* body,
-               const std::string& if_match, bool if_none_match_star, Response& out) {
+               const std::string& if_match, bool if_none_match_star, Response& out,
+               const std::string& if_none_match = "") {
     esp_http_client_config_t cfg = {};
     cfg.url = url.c_str();
     cfg.method = method;
@@ -68,6 +71,9 @@ esp_err_t http(const std::string& url, esp_http_client_method_t method, const st
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) return ESP_ERR_NO_MEM;
     esp_http_client_set_header(client, "x-ms-version", "2020-12-06");
+    if (method == HTTP_METHOD_GET && !if_none_match.empty()) {
+        esp_http_client_set_header(client, "If-None-Match", if_none_match.c_str());  // 304 if unchanged
+    }
     if (method == HTTP_METHOD_PUT) {
         esp_http_client_set_header(client, "x-ms-blob-type", "BlockBlob");
         esp_http_client_set_header(client, "Content-Type", "application/json");
@@ -166,10 +172,45 @@ esp_err_t load_locked(const Config& c) {
     cJSON_Delete(s_doc);
     s_doc = doc;
     s_loaded = true;
+    s_last_sync_us = esp_timer_get_time();
     return ESP_OK;
 }
 
-// Apply `mutate` and save. On an ETag conflict (Bookworm wrote in between) re-read and apply again once.
+// Apply `mutate` and save `doc` to `url`, guarding with the blob's ETag. A save can fail on the way back
+// (a dropped connection or a timeout while waiting for the answer) although the server already stored it, so
+// after any failure the real stored copy is re-read and the change re-applied to it: if that changes nothing
+// the write had in fact gone through and the save counts as done (this used to report a failure for a change
+// that had worked); otherwise the change is written again. Every mutation is written to be repeatable.
+esp_err_t save_doc(const std::string& url, cJSON*& doc, std::string& etag, const std::function<esp_err_t()>& reload,
+                   const std::function<void()>& mutate, const char* what) {
+    bool mutated = false;  // true when `doc` already holds the change on top of a fresh copy
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (!mutated) mutate();
+        mutated = false;
+        std::string body = print(doc, false);
+        Response r;
+        esp_err_t err = http(url, HTTP_METHOD_PUT, &body, etag, etag.empty(), r);
+        if (err == ESP_OK && (r.status == 200 || r.status == 201)) {
+            etag = r.etag;
+            s_last_sync_us = esp_timer_get_time();
+            ESP_LOGI(TAG, "%s saved (%u bytes)", what, static_cast<unsigned>(body.size()));
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "%s save attempt %d failed: %s HTTP %d: %.160s", what, attempt + 1, esp_err_to_name(err), r.status,
+                 r.body.c_str());
+        if (reload() != ESP_OK) return ESP_FAIL;  // cannot even read it back: report the failure
+        const std::string stored = print(doc, false);
+        mutate();
+        if (print(doc, false) == stored) {
+            ESP_LOGI(TAG, "%s: the change had already been saved", what);
+            return ESP_OK;
+        }
+        mutated = true;  // not saved: doc now holds the change on top of what is stored; write that
+    }
+    reload();  // give up: drop the unsaved change and go back to what is really stored
+    return ESP_FAIL;
+}
+
 esp_err_t update(const Config& c, const std::function<void()>& mutate) {
     Lock lock;
     if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
@@ -177,23 +218,7 @@ esp_err_t update(const Config& c, const std::function<void()>& mutate) {
         esp_err_t err = load_locked(c);
         if (err != ESP_OK) return err;
     }
-    for (int attempt = 0; attempt < 2; attempt++) {
-        mutate();
-        std::string body = print(s_doc, false);
-        Response r;
-        esp_err_t err = http(c.memory_url, HTTP_METHOD_PUT, &body, s_etag, s_etag.empty(), r);
-        if (err == ESP_OK && (r.status == 200 || r.status == 201)) {
-            s_etag = r.etag;
-            ESP_LOGI(TAG, "saved (%u bytes)", static_cast<unsigned>(body.size()));
-            return ESP_OK;
-        }
-        bool conflict = err == ESP_OK && (r.status == 412 || r.status == 409);
-        ESP_LOGW(TAG, "save %s: %s HTTP %d: %.200s", conflict ? "conflict" : "failed", esp_err_to_name(err), r.status,
-                 r.body.c_str());
-        // Drop our unsaved change and go back to what is really stored.
-        if (load_locked(c) != ESP_OK || !conflict) return ESP_FAIL;
-    }
-    return ESP_FAIL;
+    return save_doc(c.memory_url, s_doc, s_etag, [&] { return load_locked(c); }, mutate, "memory");
 }
 
 // ---- standby list: its own blob (see memory.h) --------------------------------------------------
@@ -248,33 +273,19 @@ esp_err_t standby_load_locked(const Config& c) {
     cJSON_Delete(s_standby);
     s_standby = doc;
     s_standby_loaded = true;
+    s_last_sync_us = esp_timer_get_time();
     return ESP_OK;
 }
 
-// Same optimistic-concurrency save as update(), for standby.json.
+// Same guarded save as update(), for standby.json.
 esp_err_t standby_update(const Config& c, const std::function<void()>& mutate) {
     if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
     if (!s_standby_loaded) {
         esp_err_t err = standby_load_locked(c);
         if (err != ESP_OK) return err;
     }
-    const std::string url = blob_url(c.memory_url, "standby.json");
-    for (int attempt = 0; attempt < 2; attempt++) {
-        mutate();
-        std::string body = print(s_standby, false);
-        Response r;
-        esp_err_t err = http(url, HTTP_METHOD_PUT, &body, s_standby_etag, s_standby_etag.empty(), r);
-        if (err == ESP_OK && (r.status == 200 || r.status == 201)) {
-            s_standby_etag = r.etag;
-            ESP_LOGI(TAG, "standby saved (%u bytes)", static_cast<unsigned>(body.size()));
-            return ESP_OK;
-        }
-        bool conflict = err == ESP_OK && (r.status == 412 || r.status == 409);
-        ESP_LOGW(TAG, "standby save %s: %s HTTP %d: %.200s", conflict ? "conflict" : "failed", esp_err_to_name(err),
-                 r.status, r.body.c_str());
-        if (standby_load_locked(c) != ESP_OK || !conflict) return ESP_FAIL;
-    }
-    return ESP_FAIL;
+    return save_doc(blob_url(c.memory_url, "standby.json"), s_standby, s_standby_etag,
+                    [&] { return standby_load_locked(c); }, mutate, "standby");
 }
 
 cJSON* standby_find(const std::string& title, const std::string& bookshare_id) {
@@ -313,6 +324,43 @@ void standby_delete(const std::string& title) {
 namespace memory {
 
 bool configured(const Config& c) { return !c.memory_url.empty(); }
+
+// Replace `doc` with a fresh copy of `url` if it changed (conditional read). Returns ESP_OK if unchanged or updated.
+static esp_err_t refresh_blob(const std::string& url, std::string& etag, cJSON*& doc, bool make_root_if_missing) {
+    Response r;
+    esp_err_t err = http(url, HTTP_METHOD_GET, nullptr, "", false, r, etag);
+    if (err != ESP_OK) return err;
+    if (r.status == 304) return ESP_OK;  // unchanged
+    if (r.status == 200) {
+        cJSON* fresh = cJSON_ParseWithLength(r.body.data(), r.body.size());
+        if (!cJSON_IsObject(fresh)) {
+            cJSON_Delete(fresh);
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+        cJSON_Delete(doc);
+        doc = fresh;
+        etag = r.etag;
+        ESP_LOGI(TAG, "%s changed elsewhere: reloaded", url.substr(0, url.find('?')).c_str());
+        return ESP_OK;
+    }
+    if (r.status == 404) return ESP_OK;  // deleted elsewhere: keep what we have
+    (void)make_root_if_missing;
+    return ESP_FAIL;
+}
+
+esp_err_t refresh(const Config& c) {
+    Lock lock;
+    if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
+    if (s_loaded && s_standby_loaded && esp_timer_get_time() - s_last_sync_us < 20LL * 1000 * 1000) return ESP_OK;
+    esp_err_t result = ESP_OK;
+    esp_err_t e1 = s_loaded ? refresh_blob(c.memory_url, s_etag, s_doc, false) : load_locked(c);
+    esp_err_t e2 = s_standby_loaded ? refresh_blob(blob_url(c.memory_url, "standby.json"), s_standby_etag, s_standby, false)
+                                    : standby_load_locked(c);
+    if (e1 != ESP_OK) result = e1;
+    else if (e2 != ESP_OK) result = e2;
+    if (result == ESP_OK) s_last_sync_us = esp_timer_get_time();
+    return result;
+}
 
 esp_err_t load(const Config& c) {
     Lock lock;
@@ -630,39 +678,51 @@ esp_err_t standby_list(const Config& c, std::string* json) {
     return ESP_OK;
 }
 
-esp_err_t standby_add(const Config& c, const std::string& title, const std::string& author,
-                      const std::string& bookshare_id, const std::string& note, bool* created) {
+esp_err_t standby_add_many(const Config& c, const std::vector<StandbyEntry>& entries, int* created, int* updated) {
     Lock lock;
-    bool made = false;
-    std::string nat = va::natural_author(author);
+    int made = 0, changed = 0;
     esp_err_t err = standby_update(c, [&] {
-        if (cJSON* e = standby_find(title, bookshare_id)) {  // already there: fill in what was missing
-            made = false;
-            if (str(e, "Author").empty() && !nat.empty()) {
-                cJSON_DeleteItemFromObjectCaseSensitive(e, "Author");
-                cJSON_AddStringToObject(e, "Author", nat.c_str());
+        made = changed = 0;  // the mutation may run twice (after an ETag conflict)
+        for (const StandbyEntry& in : entries) {
+            if (in.title.empty()) continue;
+            std::string nat = va::natural_author(in.author);
+            if (cJSON* e = standby_find(in.title, in.bookshare_id)) {  // already there: fill in what was missing
+                changed++;
+                if (str(e, "Author").empty() && !nat.empty()) {
+                    cJSON_DeleteItemFromObjectCaseSensitive(e, "Author");
+                    cJSON_AddStringToObject(e, "Author", nat.c_str());
+                }
+                if (str(e, "BookshareId").empty() && !in.bookshare_id.empty()) {
+                    cJSON_DeleteItemFromObjectCaseSensitive(e, "BookshareId");
+                    cJSON_AddStringToObject(e, "BookshareId", in.bookshare_id.c_str());
+                }
+                if (!in.note.empty()) {
+                    cJSON_DeleteItemFromObjectCaseSensitive(e, "Note");
+                    cJSON_AddStringToObject(e, "Note", in.note.c_str());
+                }
+                continue;
             }
-            if (str(e, "BookshareId").empty() && !bookshare_id.empty()) {
-                cJSON_DeleteItemFromObjectCaseSensitive(e, "BookshareId");
-                cJSON_AddStringToObject(e, "BookshareId", bookshare_id.c_str());
-            }
-            if (!note.empty()) {
-                cJSON_DeleteItemFromObjectCaseSensitive(e, "Note");
-                cJSON_AddStringToObject(e, "Note", note.c_str());
-            }
-            return;
+            made++;
+            cJSON* e = cJSON_CreateObject();
+            cJSON_AddStringToObject(e, "Title", in.title.c_str());
+            if (!nat.empty()) cJSON_AddStringToObject(e, "Author", nat.c_str());
+            if (!in.bookshare_id.empty()) cJSON_AddStringToObject(e, "BookshareId", in.bookshare_id.c_str());
+            if (!in.note.empty()) cJSON_AddStringToObject(e, "Note", in.note.c_str());
+            std::string when = now_iso();
+            if (!when.empty()) cJSON_AddStringToObject(e, "DateAdded", when.c_str());
+            cJSON_AddItemToArray(standby_books(), e);
         }
-        made = true;
-        cJSON* e = cJSON_CreateObject();
-        cJSON_AddStringToObject(e, "Title", title.c_str());
-        if (!nat.empty()) cJSON_AddStringToObject(e, "Author", nat.c_str());
-        if (!bookshare_id.empty()) cJSON_AddStringToObject(e, "BookshareId", bookshare_id.c_str());
-        if (!note.empty()) cJSON_AddStringToObject(e, "Note", note.c_str());
-        std::string when = now_iso();
-        if (!when.empty()) cJSON_AddStringToObject(e, "DateAdded", when.c_str());
-        cJSON_AddItemToArray(standby_books(), e);
     });
     if (created) *created = made;
+    if (updated) *updated = changed;
+    return err;
+}
+
+esp_err_t standby_add(const Config& c, const std::string& title, const std::string& author,
+                      const std::string& bookshare_id, const std::string& note, bool* created) {
+    int made = 0, changed = 0;
+    esp_err_t err = standby_add_many(c, {StandbyEntry{title, author, bookshare_id, note}}, &made, &changed);
+    if (created) *created = made > 0;
     return err;
 }
 

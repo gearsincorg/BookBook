@@ -96,7 +96,10 @@ const char kSystemPrompt[] =
     "library's request list. When the member has found a book or series they want but has not said what to do "
     "with it, offer the choice in one short question: put it on the bookshelf now, or save it on the standby "
     "list for later. 'Add it' means the bookshelf; 'save it', 'for later' or 'standby' means add_to_standby, "
-    "which needs no confirmation. A series can go on the list under its series name.\n"
+    "which needs no confirmation. Every book is its own entry: when asked to save several books, or all the "
+    "books in a series, add each book separately (all in one add_to_standby call, using the books list, in "
+    "reading order from your own knowledge), never as one entry with the titles in a note. A series is saved as "
+    "a single entry only if the member explicitly asks for the series as one item.\n"
     "22. To move something from the standby list to the bookshelf, use add_to_bookshelf (find its id and a "
     "format with search_library if the entry has no id). That removes the standby entry by itself; if the entry "
     "is a series or is titled differently, pass standbyEntry, and pass keepOnStandby only if the member wants "
@@ -196,13 +199,18 @@ const char kToolsJson[] = R"JSON([
   "description":"Get a summary of the member's taste: their most frequent authors, favourite authors and books, what is on the bookshelf now, and their books list. Use it to ground 'what should I read next' and 'something like X' requests, to recognise books they already have or have read so they are not suggested again, and to answer 'what have I been reading lately?'.",
   "input_schema":{"type":"object","properties":{}}},
  {"name":"add_to_standby",
-  "description":"Save a book or a series on the member's standby list: their own save-for-later list, an alternative to putting it on the bookshelf now. It is separate from the library's request list (which really queues the title with the library). Do this straight away when asked; no confirmation needed. A series can go on the list under its series name, with the detail in the note.",
+  "description":"Save books on the member's standby list: their own save-for-later list, an alternative to putting them on the bookshelf now. It is separate from the library's request list (which really queues a title with the library). Do this straight away when asked; no confirmation needed. EVERY BOOK IS ITS OWN ENTRY, so each can later be moved to the bookshelf or deleted on its own: if the member asks for several books, or all the books in a series, pass them all in `books`, one item per book, listing them in reading order from your own knowledge of the series. Do not squeeze a list of titles into one entry's note. Only save a series as a single entry if the member explicitly asks for the series as one item.",
   "input_schema":{"type":"object","properties":{
-    "title":{"type":"string","description":"The book's title, or the series name."},
-    "author":{"type":"string","description":"The author, if known, in natural order."},
-    "bookshareId":{"type":"string","description":"The catalogue id from a search result, if you have it (a single book, not a series)."},
-    "note":{"type":"string","description":"A short note, e.g. 'series: start with The Last Kingdom'."}},
-   "required":["title"]}},
+    "books":{"type":"array","description":"Several books in one call (preferred when there is more than one).","items":{"type":"object","properties":{
+      "title":{"type":"string","description":"One book's title."},
+      "author":{"type":"string","description":"The author, in natural order."},
+      "bookshareId":{"type":"string","description":"The catalogue id from a search result, if you have it."},
+      "note":{"type":"string","description":"A short note, e.g. 'James Bond #1' or 'series: The Last Kingdom, book 1'."}},
+      "required":["title"]}},
+    "title":{"type":"string","description":"For a single book: its title."},
+    "author":{"type":"string","description":"For a single book: the author, in natural order."},
+    "bookshareId":{"type":"string","description":"For a single book: the catalogue id, if you have it."},
+    "note":{"type":"string","description":"For a single book: a short note."}}}},
  {"name":"get_standby_list",
   "description":"Get everything on the member's standby (save-for-later) list.",
   "input_schema":{"type":"object","properties":{}}},
@@ -415,7 +423,7 @@ std::string tool_profile(const Config& c, bool* is_error) {
         ESP_LOGW(TAG, "profile: bookshelf unavailable, using the books list only");
         shelf = va::Shelf();
     }
-    if (memory::configured(c) && !memory::loaded()) memory::load(c);
+    if (memory::configured(c)) memory::refresh(c);  // loads on first use, then only when changed elsewhere
     (void)is_error;
     return memory::reading_profile(shelf);
 }
@@ -600,6 +608,7 @@ std::string memory_tool(const Config& c, const std::string& name, cJSON* input, 
         *is_error = true;
         return "Memory storage is not set up on this device yet, so nothing can be remembered.";
     }
+    memory::refresh(c);  // pick up changes made on another device
     if (!memory::loaded() && memory::load(c) != ESP_OK) {
         *is_error = true;
         return "Could not reach the memory storage.";
@@ -622,20 +631,34 @@ std::string memory_tool(const Config& c, const std::string& name, cJSON* input, 
         return ok_or_fail(memory::remember(c, note), "the note");
     }
     if (name == "add_to_standby") {
-        std::string title = arg(input, "title");
-        if (title.empty()) {
-            *is_error = true;
-            return "Missing required argument: title";
+        std::vector<memory::StandbyEntry> entries;
+        const cJSON* many = cJSON_GetObjectItemCaseSensitive(input, "books");
+        if (cJSON_IsArray(many)) {
+            const cJSON* b;
+            cJSON_ArrayForEach(b, many) {
+                std::string t = arg(const_cast<cJSON*>(b), "title");
+                if (!t.empty()) {
+                    entries.push_back({t, arg(const_cast<cJSON*>(b), "author"), arg(const_cast<cJSON*>(b), "bookshareId"),
+                                       arg(const_cast<cJSON*>(b), "note")});
+                }
+            }
         }
-        bool created = false;
-        if (memory::standby_add(c, title, arg(input, "author"), arg(input, "bookshareId"), arg(input, "note"), &created) != ESP_OK) {
+        if (entries.empty() && !arg(input, "title").empty()) {
+            entries.push_back({arg(input, "title"), arg(input, "author"), arg(input, "bookshareId"), arg(input, "note")});
+        }
+        if (entries.empty()) {
+            *is_error = true;
+            return "Nothing to add: give a title, or a books list.";
+        }
+        int created = 0, updated = 0;
+        if (memory::standby_add_many(c, entries, &created, &updated) != ESP_OK) {
             *is_error = true;
             return "Could not save to the standby list.";
         }
         cJSON* o = cJSON_CreateObject();
         cJSON_AddBoolToObject(o, "success", true);
-        cJSON_AddStringToObject(o, "title", title.c_str());
-        cJSON_AddBoolToObject(o, "newOnStandby", created);
+        cJSON_AddNumberToObject(o, "newOnStandby", created);
+        cJSON_AddNumberToObject(o, "alreadyOnStandby", updated);
         return print(o);
     }
     if (name == "get_standby_list") {
@@ -869,7 +892,11 @@ esp_err_t respond(const Config& c, const std::string& user_text, std::string& re
     }
     init_once();
     if (!s_messages || !s_tools) return ESP_ERR_NO_MEM;
-    if (memory::configured(c) && !memory::loaded()) memory::load(c);  // usually done at startup already
+    // Loaded at startup; a NEW conversation also checks whether another device changed anything since.
+    if (memory::configured(c)) {
+        if (!memory::loaded()) memory::load(c);
+        else if (cJSON_GetArraySize(s_messages) == 0) memory::refresh(c);
+    }
 
     int64_t now = esp_timer_get_time();
     if (s_last_turn_us && now - s_last_turn_us > kIdleResetUs) rollback_to(0);  // stale conversation

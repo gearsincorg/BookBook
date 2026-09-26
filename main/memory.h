@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 #include "config.h"
 #include "esp_err.h"
 #include "va.h"
@@ -65,6 +66,17 @@ std::string reading_profile(const va::Shelf& shelf);
 esp_err_t standby_list(const Config& c, std::string* json);  // JSON array of the entries
 esp_err_t standby_add(const Config& c, const std::string& title, const std::string& author,
                       const std::string& bookshare_id, const std::string& note, bool* created);
+// Several at once, in ONE save (a whole series is a dozen entries): each book is its own entry, so each can
+// be moved to the bookshelf or deleted on its own. `created` / `updated` count new and already-listed ones.
+struct StandbyEntry {
+    std::string title, author, bookshare_id, note;
+};
+esp_err_t standby_add_many(const Config& c, const std::vector<StandbyEntry>& entries, int* created, int* updated);
+
+// Re-reads memory.json and standby.json if they changed elsewhere (another device, or Bookworm): this board
+// keeps a copy in RAM, which otherwise goes stale. A conditional read (If-None-Match), so cheap when nothing
+// changed, and skipped if it already checked within the last 20 seconds.
+esp_err_t refresh(const Config& c);
 // Removes one entry: exact title (ignoring case), else a unique partial match. ESP_ERR_NOT_FOUND if none,
 // ESP_ERR_INVALID_SIZE if several match (count in *matches).
 esp_err_t standby_remove(const Config& c, const std::string& title, std::string* matched_title, int* matches);
