@@ -46,9 +46,26 @@ menu "BookBook"
         default n
         depends on BOOKBOOK_BOARD_XIAO_ESP32S3
     config BOOKBOOK_MIC_GAIN
-        int "Microphone software gain (multiplier)"
+        int "Microphone software gain (multiplier), used when adaptive gain is off"
         range 1 32
-        default 3
+        default 4
+    config BOOKBOOK_MIC_AUTO_GAIN
+        bool "Adaptive microphone gain: scale each recording to a target level"
+        default y
+        help
+            After a recording, the level of its loud parts (the 99.5th percentile, so a click or bump does not
+            count) is measured and one gain is applied to the whole recording to bring that level to the
+            target. Quiet or distant speech is raised and loud or close speech is not pushed into clipping.
+    config BOOKBOOK_MIC_TARGET_PEAK
+        int "Adaptive gain: level the loud parts of a recording are scaled to (of 32767)"
+        range 2000 30000
+        default 12000
+        depends on BOOKBOOK_MIC_AUTO_GAIN
+    config BOOKBOOK_MIC_MAX_GAIN
+        int "Adaptive gain: largest multiplier (limits how much room noise is amplified)"
+        range 1 64
+        default 20
+        depends on BOOKBOOK_MIC_AUTO_GAIN
 
     config BOOKBOOK_TOUCH_ENABLED
         bool "Use the capacitive touch pad as the button (off: the BOOT button is the button)"

@@ -256,7 +256,8 @@ static esp_err_t transcribe_once(const char* region, const char* key, const int1
     cfg.url = url;
     cfg.method = HTTP_METHOD_POST;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
-    cfg.timeout_ms = 10000;  // speech-to-text normally answers in about 1.5 s
+    // Speech-to-text normally answers in about 1.5 s; a long recording (up to 30 s) takes Azure longer to process.
+    cfg.timeout_ms = 10000 + static_cast<int>(samples / 16000) * 500;
     cfg.buffer_size = 2048;
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) return ESP_FAIL;

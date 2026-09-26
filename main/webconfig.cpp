@@ -276,6 +276,12 @@ static esp_err_t h_test_mic(httpd_req_t* req) {
     cJSON_AddStringToObject(o, "status", status.c_str());
     cJSON_AddNumberToObject(o, "rms", stats.rms);
     cJSON_AddNumberToObject(o, "peak", stats.peak);
+    cJSON_AddNumberToObject(o, "gain", stats.gain);
+    cJSON_AddNumberToObject(o, "raw_rms", stats.raw_rms);
+    cJSON_AddNumberToObject(o, "raw_peak", stats.raw_peak);
+    cJSON_AddNumberToObject(o, "raw_peak_ms", stats.raw_peak_ms);
+    cJSON_AddNumberToObject(o, "process_ms", stats.process_ms);
+    cJSON_AddNumberToObject(o, "near_peak_pct", stats.near_peak_pct);
     return send_json(req, o);
 }
 

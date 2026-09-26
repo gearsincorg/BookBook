@@ -36,13 +36,30 @@ static void show_idle_state() {
     else leds::waiting();
 }
 
-// Polled by the speech player so a button press stops a long reading.
-static bool key_cancel() { return board::key_pressed(board::Key::Key1); }
+// The longest question that is recorded (16 kHz mono 16-bit: 960 KB of PSRAM, reserved for each press); Azure's
+// short-audio endpoint accepts up to 60 s. A question that hits the limit is answered as far as it got, and the
+// answer starts by saying so (the notice states the number of seconds).
+constexpr int kMaxTalkMs = 30000;
+static_assert(kMaxTalkMs == 30000, "update kCutOffNotice to match kMaxTalkMs");
+static const char kCutOffNotice[] = "I'm sorry, but I can only listen up to 30 seconds at a time. ";
+
+// Polled by the speech player so a touch stops a long reading. A pad that is still down when speech starts (for
+// example the 15 s talk limit ended a long question while the member was still holding) is not a cancel: only a
+// touch made after the pad has been let go counts.
+static bool s_cancel_armed;
+static bool key_cancel() {
+    if (!board::key_pressed(board::Key::Key1)) {
+        s_cancel_armed = true;
+        return false;
+    }
+    return s_cancel_armed;
+}
 
 static void say(const Config& c, const std::string& text) {
     thinking::stop();  // the real answer is ready: waiting sounds end immediately
     if (c.azure_key.empty()) return;
     leds::speaking();  // low red while it is spoken
+    s_cancel_armed = !board::key_pressed(board::Key::Key1);
     ESP_LOGI(TAG, "say: %s", text.c_str());
     azure::speak(c.azure_region.c_str(), c.azure_key.c_str(), text.c_str(), key_cancel);
 }
@@ -64,8 +81,9 @@ static void run_turn(const std::shared_ptr<Turn>& t) {
 
     mic::Stats stats;
     mic::process(t->pcm, &stats);
-    ESP_LOGI(TAG, "recorded %u ms, rms %d, peak %d", static_cast<unsigned>(t->pcm.size() * 1000 / mic::kSampleRateHz),
-             stats.rms, stats.peak);
+    ESP_LOGI(TAG, "recorded %u ms, rms %d, peak %d, gain x%.1f (raw rms %d, peak %d at %d ms, %.2f%% near peak)",
+             static_cast<unsigned>(t->pcm.size() * 1000 / mic::kSampleRateHz), stats.rms, stats.peak, stats.gain, stats.raw_rms,
+             stats.raw_peak, stats.raw_peak_ms, stats.near_peak_pct);
     if (!wifi::connected()) {
         t->spoken = "I am not connected to the internet.";
     } else {
@@ -118,7 +136,7 @@ static void run_pending_update(const Config& c) {
 // Push-to-talk turn: transcribe what was recorded, ask the librarian brain (Claude with library tools), and
 // speak the answer. Returns true if the pad is still touched when it ends because the touch that aborted it
 // (or stopped the answer) is still down: the caller must ignore that press's release.
-static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm) {
+static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm, bool cut_off = false) {
     constexpr int kTurnDeadlineMs = 45000;  // give up rather than wait for ever
     constexpr int kAbortGuardMs = 300;      // ignore pad bounce right after letting go
     ESP_LOGI(TAG, "turn start: free internal heap %u (largest %u), PSRAM %u",
@@ -136,14 +154,19 @@ static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm) {
         delete holder;
         thinking::stop();
         say(c, "Sorry, I ran out of memory. Please try again.");
-        return key_cancel();
+        return board::key_pressed(board::Key::Key1);
     }
 
     const int64_t start_ms = esp_timer_get_time() / 1000;
     bool aborted = false, timed_out = false;
+    // A pad still held when the turn starts (the talk limit ended a long question) is not an abort: a touch only
+    // counts once the pad has been let go and touched again.
+    bool released = !board::key_pressed(board::Key::Key1);
     while (!turn->done) {
         const int64_t waited = esp_timer_get_time() / 1000 - start_ms;
-        if (waited > kAbortGuardMs && board::key_pressed(board::Key::Key1)) {
+        const bool down = board::key_pressed(board::Key::Key1);
+        if (!down) released = true;
+        if (waited > kAbortGuardMs && down && released) {
             aborted = true;
             break;
         }
@@ -163,11 +186,11 @@ static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm) {
     if (timed_out) {
         ESP_LOGW(TAG, "turn timed out after %d ms", kTurnDeadlineMs);
         say(c, "Sorry, that took too long, so I stopped. If you were changing your lists, please ask me to check them.");
-        return key_cancel();
+        return board::key_pressed(board::Key::Key1);
     }
-    say(c, turn->spoken);
+    say(c, cut_off ? std::string(kCutOffNotice) + turn->spoken : turn->spoken);
     run_pending_update(c);
-    return key_cancel();
+    return board::key_pressed(board::Key::Key1);
 }
 
 // Start-up preparation that only speeds up the first request, so it must not keep the member waiting: read
@@ -259,10 +282,9 @@ extern "C" void app_main() {
     show_idle_state();
     ESP_LOGI(TAG, "ready: press-to-talk is available");
 
-    // Button: push-to-talk. Recording runs while it is held (up to 15 s); on release the recording is
+    // Button: push-to-talk. Recording runs while it is held (up to kMaxTalkMs); on release the recording is
     // transcribed and answered. A press shorter than kMinTalkMs is a bump, not speech: ignored.
     constexpr int kMinTalkMs = 700;
-    constexpr int kMaxTalkMs = 15000;
     bool was_down = false;
     bool ignore_release = false;  // a press that only cancelled a reading/answer, or an over-long talk
     bool talk_ended = false;
@@ -289,7 +311,7 @@ extern "C" void app_main() {
                 talk_ended = true;
                 mic::stop();
                 Config c = config::get();
-                handle_utterance(c, pcm);
+                handle_utterance(c, pcm, /*cut_off=*/true);
                 ignore_release = true;
                 show_idle_state();
             }

@@ -9,6 +9,7 @@
 #include "driver/i2s_pdm.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -76,26 +77,100 @@ void stop() {
     s_running = false;
 }
 
-// Remove DC offset (PDM mics have one), then apply gain with clipping.
+#ifdef CONFIG_BOOKBOOK_MIC_AUTO_GAIN
+// The level of the loud parts of a recording: the 99.5th percentile of |sample - mean|, from a histogram (32
+// counts per bin, no copy of the recording), so a click or bump does not set the gain for the whole thing.
+static int loud_level(const std::vector<int16_t>& pcm, int mean) {
+    constexpr int kBinShift = 5, kBins = 32768 >> kBinShift;
+    uint32_t hist[kBins] = {};
+    for (int16_t s : pcm) {
+        const int a = std::abs(s - mean);
+        hist[std::min(a >> kBinShift, kBins - 1)]++;
+    }
+    const uint32_t keep = static_cast<uint32_t>(pcm.size() * 995ull / 1000);
+    uint32_t seen = 0;
+    for (int b = 0; b < kBins; b++) {
+        seen += hist[b];
+        if (seen >= keep) return (b + 1) << kBinShift;
+    }
+    return 32768;
+}
+#endif
+
+// The recording's mean, as an integer (a fraction of a sample less makes no difference).
+static int mean_of(const std::vector<int16_t>& pcm) {
+    int64_t sum = 0;
+    for (int16_t s : pcm) sum += s;
+    return static_cast<int>(sum / static_cast<int64_t>(pcm.size()));
+}
+
+// Remove DC offset (PDM mics have one), high-pass, then apply gain with clipping. Integer and single-precision
+// maths only: the S3 has no double-precision hardware, and this runs over the whole recording after the button is
+// released, so it is on the member's waiting time (the log line at the end reports the cost).
 void process(std::vector<int16_t>& pcm, Stats* stats) {
     if (stats) *stats = Stats();
     if (pcm.empty()) return;
-    double mean = 0;
-    for (int16_t s : pcm) mean += s;
-    mean /= pcm.size();
-    double sq = 0;
+    const int64_t t0 = esp_timer_get_time();
+
+    // The recording as the microphone delivered it (DC removed), for the diagnostics in Stats.
+    int mean = mean_of(pcm);
+    int raw_peak = 0;
+    size_t raw_peak_at = 0;
+    uint64_t raw_sq = 0;
+    for (size_t i = 0; i < pcm.size(); i++) {
+        const int a = std::abs(pcm[i] - mean);
+        if (a > raw_peak) {
+            raw_peak = a;
+            raw_peak_at = i;
+        }
+        raw_sq += static_cast<uint32_t>(a * a);
+    }
+    size_t near_peak = 0;
+    for (int16_t s : pcm) near_peak += std::abs(s - mean) * 10 >= raw_peak * 9;
+
+    // High-pass at ~70 Hz. The microphone and the receive filter settle slowly after the clock starts, leaving a
+    // decaying DC step at the start of a recording that one whole-recording mean cannot remove; it is heard as a
+    // click on playback and looks like loud speech to the adaptive gain. Speech does not reach down to 70 Hz.
+    {
+        constexpr float kHighPassHz = 70.0f;
+        const float a = 1.0f - 2.0f * static_cast<float>(M_PI) * kHighPassHz / kSampleRateHz;
+        float y = 0.0f, x_prev = pcm[0];
+        for (auto& s : pcm) {
+            const float x = s;
+            y = a * (y + x - x_prev);
+            x_prev = x;
+            s = static_cast<int16_t>(std::max(-32768.0f, std::min(32767.0f, y)));
+        }
+        mean = mean_of(pcm);
+    }
+
+    float gain = CONFIG_BOOKBOOK_MIC_GAIN;
+#ifdef CONFIG_BOOKBOOK_MIC_AUTO_GAIN
+    gain = std::max(1.0f, std::min(static_cast<float>(CONFIG_BOOKBOOK_MIC_MAX_GAIN),
+                                   static_cast<float>(CONFIG_BOOKBOOK_MIC_TARGET_PEAK) / loud_level(pcm, mean)));
+#endif
+    uint64_t sq = 0;
     int peak = 0;
     for (auto& s : pcm) {
-        int v = static_cast<int>((s - mean) * CONFIG_BOOKBOOK_MIC_GAIN);
+        int v = static_cast<int>(std::lround((s - mean) * gain));
         v = std::max(-32768, std::min(32767, v));
         s = static_cast<int16_t>(v);
-        sq += static_cast<double>(v) * v;
+        sq += static_cast<uint32_t>(v * v);
         peak = std::max(peak, std::abs(v));
     }
+    const int process_ms = static_cast<int>((esp_timer_get_time() - t0) / 1000);
     if (stats) {
-        stats->rms = static_cast<int>(std::sqrt(sq / pcm.size()));
+        stats->process_ms = process_ms;
+        stats->rms = static_cast<int>(std::sqrt(static_cast<double>(sq) / pcm.size()));
         stats->peak = peak;
+        stats->gain = gain;
+        stats->raw_peak = raw_peak;
+        stats->raw_rms = static_cast<int>(std::sqrt(static_cast<double>(raw_sq) / pcm.size()));
+        stats->near_peak_pct = 100.0f * near_peak / pcm.size();
+        stats->raw_peak_ms = static_cast<int>(raw_peak_at * 1000 / kSampleRateHz);
     }
+    ESP_LOGI(TAG, "processed %u samples (%u ms of audio) in %d ms", static_cast<unsigned>(pcm.size()),
+             static_cast<unsigned>(pcm.size() * 1000 / kSampleRateHz), process_ms);
 }
 
 esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats) {
