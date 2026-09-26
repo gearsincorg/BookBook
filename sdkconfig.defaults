@@ -9,6 +9,11 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESP_WIFI_PS_NONE=y
 CONFIG_SPIRAM_USE_MALLOC=y
+
+# TLS buffers in PSRAM. Each secure connection needs two ~16 KB buffers; with the library and Claude
+# connections kept open, the fast internal RAM ran out ("mbedtls_ssl_setup returned -0x7F00", largest free
+# block 15 KB) and speech-to-text could not connect ("I could not reach the speech service").
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=8192
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384

@@ -43,7 +43,10 @@ static const char* TAG = "touch";
 // of noise while staying far below any real touch. Lower this ratio if a
 // surface-covered pad isn't registering; raise it further if it still
 // free-runs from noise.
-#define TOUCH_ACTIVE_DELTA_RATIO 0.30f
+// BookBook: lowered from PhilbotSays' 0.30 to 0.20 in two 5-point steps (owner, 2026-09-26) because 0.30 asked
+// for too firm a touch. CAUTION: PhilbotSays measured idle noise up to ~14.7% of baseline, so the release point
+// (0.20 - 0.05 = 0.15) now sits right at the noise ceiling. If the pad free-runs or sticks on, raise this.
+#define TOUCH_ACTIVE_DELTA_RATIO 0.20f
 
 // Once active, the delta must fall back below (ACTIVE - HYSTERESIS) before
 // touch_is_active() reports inactive again - so a reading hovering right

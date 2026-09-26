@@ -19,7 +19,7 @@ static const char* TAG = "brain";
 
 namespace {
 
-constexpr int kMaxToolRoundTrips = 5;
+constexpr int kMaxToolRoundTrips = 8;  // then one last round, without tools, to say what was done
 constexpr int kMaxMessages = 40;                       // history cap (trimmed at turn boundaries)
 constexpr int64_t kIdleResetUs = 10LL * 60 * 1000000;  // forget the conversation after 10 idle minutes
 constexpr size_t kMaxResponseBytes = 96 * 1024;
@@ -110,6 +110,12 @@ const char kSystemPrompt[] =
     "just delete it. 'What books do I have on hold' is answered with get_on_hold_list.\n"
     "23. Deleting something from the On Hold list needs no confirmation: do it with remove_from_on_hold and say "
     "which book you removed. If several entries match, ask which one.\n"
+    "24. Stay in scope: you help with the member's library, books, reading and lists. For anything else, such as "
+    "the weather, news or general questions, say in one short sentence that you can only help with their books "
+    "and library, and do not call any tools for it.\n"
+    "25. Putting books On Hold does not need a catalogue search: do it straight away from your own knowledge, in "
+    "a single add_to_on_hold call. Only search the catalogue when you are about to put a book on the bookshelf "
+    "and need its id and format.\n"
     "12. If a tool result says dryRun, the change was only pretended (practice mode). Tell the member it was a "
     "practice run and that nothing on their real library account changed.\n";
 
@@ -278,7 +284,7 @@ bool open_client() {
     cfg.method = HTTP_METHOD_POST;
     cfg.event_handler = on_http_event;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
-    cfg.timeout_ms = 60000;
+    cfg.timeout_ms = 25000;  // a stalled call must not hold the member up for a minute
     cfg.keep_alive_enable = true;  // later round trips in a turn skip the ~0.7 s TLS handshake
     cfg.buffer_size = 4096;
     cfg.buffer_size_tx = 2048;
@@ -317,9 +323,8 @@ std::string print(cJSON* j) {
 }
 
 esp_err_t ensure_login(const Config& c) {
-    if (va::logged_in()) return ESP_OK;
     std::string why;
-    return va::login(c.va_user, c.va_password, &why);
+    return va::ensure_logged_in(c.va_user, c.va_password, &why);
 }
 
 std::string tool_search(const Config& c, cJSON* input, bool* is_error) {
@@ -886,7 +891,7 @@ void reset() {
     if (s_messages) rollback_to(0);
 }
 
-esp_err_t respond(const Config& c, const std::string& user_text, std::string& reply) {
+esp_err_t respond(const Config& c, const std::string& user_text, std::string& reply, const std::atomic<bool>* cancel) {
     Lock lock;
     static const char kSorry[] = "Sorry, I ran into a problem. Could you try that again?";
     reply = kSorry;
@@ -897,9 +902,8 @@ esp_err_t respond(const Config& c, const std::string& user_text, std::string& re
     init_once();
     if (!s_messages || !s_tools) return ESP_ERR_NO_MEM;
     // Loaded at startup; a NEW conversation also checks whether another device changed anything since.
-    if (memory::configured(c)) {
-        if (!memory::loaded()) memory::load(c);
-        else if (cJSON_GetArraySize(s_messages) == 0) memory::refresh(c);
+    if (memory::configured(c) && (!memory::loaded() || cJSON_GetArraySize(s_messages) == 0)) {
+        memory::refresh(c);  // loads if not loaded yet (waits for the start-up warm-up), else checks for changes
     }
 
     int64_t now = esp_timer_get_time();
@@ -911,11 +915,28 @@ esp_err_t respond(const Config& c, const std::string& user_text, std::string& re
     cJSON_AddStringToObject(user, "content", user_text.c_str());
     cJSON_AddItemToArray(s_messages, user);
 
-    for (int round = 0; round < kMaxToolRoundTrips; round++) {
+    auto cancelled = [&] { return cancel && cancel->load(); };
+    for (int round = 0; round <= kMaxToolRoundTrips; round++) {
+        if (cancelled()) {
+            ESP_LOGI(TAG, "turn abandoned before round %d", round + 1);
+            rollback_to(checkpoint);
+            reply.clear();
+            return ESP_ERR_INVALID_STATE;
+        }
+        // After kMaxToolRoundTrips rounds of tool calls, one more round WITHOUT tools: the changes already made
+        // are real, so the member must be told what was done (this used to discard the work and report failure).
+        const bool last_round = round == kMaxToolRoundTrips;
         JsonPtr req(cJSON_CreateObject());
         cJSON_AddStringToObject(req.get(), "model", CONFIG_BOOKBOOK_CLAUDE_MODEL);
         cJSON_AddNumberToObject(req.get(), "max_tokens", 1024);
         std::string system = std::string(kSystemPrompt) + "\nRemembered from previous sessions:\n" + memory::prompt_snapshot();
+        if (last_round) {
+            system += "\nYou have used every step you are allowed this turn. Do not call any more tools. Tell the member "
+                      "briefly, in one or two sentences, what you have already done and what is still left, and offer to "
+                      "continue if they ask again.\n";
+            cJSON* none = cJSON_AddObjectToObject(req.get(), "tool_choice");
+            cJSON_AddStringToObject(none, "type", "none");
+        }
         cJSON_AddStringToObject(req.get(), "system", system.c_str());
         cJSON_AddItemReferenceToObject(req.get(), "messages", s_messages);  // referenced, not owned
         cJSON_AddItemReferenceToObject(req.get(), "tools", s_tools);
@@ -931,6 +952,16 @@ esp_err_t respond(const Config& c, const std::string& user_text, std::string& re
                  static_cast<int>((esp_timer_get_time() - t0) / 1000));
         if (err != ESP_OK || resp.status != 200) {
             ESP_LOGE(TAG, "Claude call failed (%s, HTTP %d): %.300s", esp_err_to_name(err), resp.status, resp.body.c_str());
+            if (cancelled()) {
+                rollback_to(checkpoint);
+                reply.clear();
+                return ESP_ERR_INVALID_STATE;
+            }
+            if (last_round) {  // tools already ran: do not throw the work away and do not claim it failed
+                reply = "I got part of the way through that but ran out of steps. Please ask me to check your lists.";
+                s_last_turn_us = esp_timer_get_time();
+                return ESP_FAIL;
+            }
             rollback_to(checkpoint);
             if (resp.status == 401) reply = "My Anthropic key was rejected. Please check it on the setup page.";
             return ESP_FAIL;
@@ -940,6 +971,25 @@ esp_err_t respond(const Config& c, const std::string& user_text, std::string& re
         if (!cJSON_IsArray(content)) {
             rollback_to(checkpoint);
             return ESP_ERR_INVALID_RESPONSE;
+        }
+
+        if (last_round) {  // text only, whatever the model sent: a stray tool_use with no result would corrupt the history
+            std::string said;
+            const cJSON* b;
+            cJSON_ArrayForEach(b, content) {
+                const cJSON* ty = cJSON_GetObjectItemCaseSensitive(b, "type");
+                const cJSON* tx = cJSON_GetObjectItemCaseSensitive(b, "text");
+                if (cJSON_IsString(ty) && strcmp(ty->valuestring, "text") == 0 && cJSON_IsString(tx)) said += tx->valuestring;
+            }
+            cJSON* am = cJSON_CreateObject();
+            cJSON_AddStringToObject(am, "role", "assistant");
+            cJSON_AddStringToObject(am, "content", said.c_str());
+            cJSON_AddItemToArray(s_messages, am);
+            s_last_turn_us = esp_timer_get_time();
+            trim_history();
+            reply = speakable(said);
+            if (reply.empty()) reply = "I did part of that but ran out of steps. Please ask me to check your lists.";
+            return ESP_OK;
         }
 
         // Keep the assistant turn exactly as returned (content blocks must round-trip verbatim).
@@ -963,6 +1013,12 @@ esp_err_t respond(const Config& c, const std::string& user_text, std::string& re
                 cJSON* input = cJSON_GetObjectItemCaseSensitive(block, "input");
                 bool is_error = false;
                 std::string nm = cJSON_IsString(name) ? name->valuestring : "";
+                if (cancelled()) {  // the member gave up: do not start another step
+                    cJSON_Delete(results);
+                    rollback_to(checkpoint);
+                    reply.clear();
+                    return ESP_ERR_INVALID_STATE;
+                }
                 ESP_LOGI(TAG, "tool: %s", nm.c_str());
                 std::string result = run_tool(c, nm, input, &is_error);
                 cJSON* tr = cJSON_CreateObject();
@@ -988,7 +1044,7 @@ esp_err_t respond(const Config& c, const std::string& user_text, std::string& re
         cJSON_AddItemToArray(s_messages, tool_msg);
     }
 
-    rollback_to(checkpoint);
+    rollback_to(checkpoint);  // not reached: the last round always returns
     reply = "Sorry, that took more steps than I can manage in one go. Could you ask again, maybe more specifically?";
     return ESP_FAIL;
 }

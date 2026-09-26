@@ -65,6 +65,14 @@ void set_leds(uint8_t r, uint8_t g, uint8_t b) {
     led_strip_refresh(s_leds);
 }
 
+int led_count() { return kXiaoLedCount; }
+void set_pixel(int index, uint8_t r, uint8_t g, uint8_t b) {
+    if (s_leds && index >= 0 && index < kXiaoLedCount) led_strip_set_pixel(s_leds, index, r, g, b);
+}
+void show() {
+    if (s_leds) led_strip_refresh(s_leds);
+}
+
 void set_amp(bool) {}
 
 bool key_pressed(Key key) {
@@ -123,6 +131,14 @@ void set_leds(uint8_t r, uint8_t g, uint8_t b) {
     if (!s_leds) return;
     for (int i = 0; i < kLedCount; i++) led_strip_set_pixel(s_leds, i, r, g, b);
     led_strip_refresh(s_leds);
+}
+
+int led_count() { return kLedCount; }
+void set_pixel(int index, uint8_t r, uint8_t g, uint8_t b) {
+    if (s_leds && index >= 0 && index < kLedCount) led_strip_set_pixel(s_leds, index, r, g, b);
+}
+void show() {
+    if (s_leds) led_strip_refresh(s_leds);
 }
 
 void set_amp(bool on) {

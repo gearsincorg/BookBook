@@ -312,6 +312,12 @@ std::string natural_author(const std::string& catalogue_name) {
 
 bool logged_in() { return s_logged_in; }
 
+esp_err_t ensure_logged_in(const std::string& user, const std::string& password, std::string* error) {
+    Lock lock;  // held while a login in progress finishes, then we see its result
+    if (s_logged_in && user == s_user) return ESP_OK;
+    return login(user, password, error);
+}
+
 // Mirrors dodp_auth/js/login.js: GET the login page for a CSRF token, POST base64 credentials as
 // JSON with that token, then GET /dodp-auth/api/authorize to establish the real session.
 esp_err_t login(const std::string& user, const std::string& password, std::string* error) {

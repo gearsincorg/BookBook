@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <string>
 #include "config.h"
 #include "esp_err.h"
@@ -16,7 +17,10 @@ namespace brain {
 
 // Answers one spoken request. `reply` is always set to something speakable, even on failure (a short
 // apology, never a raw error). Returns ESP_OK if it came from Claude. Thread-safe; turns are serialised.
-esp_err_t respond(const Config& cfg, const std::string& user_text, std::string& reply);
+// `cancel`, if given, is checked between steps: once it is set the turn is abandoned (history rolled back,
+// reply left empty, ESP_ERR_INVALID_STATE). The step in progress still has to return first.
+esp_err_t respond(const Config& cfg, const std::string& user_text, std::string& reply,
+                  const std::atomic<bool>* cancel = nullptr);
 
 // Forgets the conversation so far (also happens automatically after 10 idle minutes).
 void reset();

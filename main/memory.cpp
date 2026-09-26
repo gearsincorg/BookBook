@@ -65,7 +65,7 @@ esp_err_t http(const std::string& url, esp_http_client_method_t method, const st
     cfg.method = method;
     cfg.event_handler = on_event;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
-    cfg.timeout_ms = 20000;
+    cfg.timeout_ms = 12000;
     cfg.buffer_size = 2048;
     cfg.buffer_size_tx = 2048;
     cfg.user_data = &out;

@@ -174,7 +174,7 @@ static esp_err_t transcribe_once(const char* region, const char* key, const int1
     cfg.url = url;
     cfg.method = HTTP_METHOD_POST;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
-    cfg.timeout_ms = 20000;
+    cfg.timeout_ms = 10000;  // speech-to-text normally answers in about 1.5 s
     cfg.buffer_size = 2048;
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) return ESP_FAIL;
@@ -207,8 +207,10 @@ static esp_err_t transcribe_once(const char* region, const char* key, const int1
     int n;
     while ((n = esp_http_client_read(client, buf, sizeof(buf))) > 0 && body.size() < 8192) body.append(buf, n);
     esp_http_client_cleanup(client);
-    ESP_LOGI(TAG, "stt: HTTP %d, %u audio bytes, %d ms", http_status, static_cast<unsigned>(data_bytes),
-             static_cast<int>((esp_timer_get_time() - t0) / 1000));
+    ESP_LOGI(TAG, "stt: HTTP %d, %u audio bytes, %d ms (free internal heap %u, largest block %u)", http_status,
+             static_cast<unsigned>(data_bytes), static_cast<int>((esp_timer_get_time() - t0) / 1000),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
     if (http_status != 200) {
         ESP_LOGE(TAG, "stt HTTP %d: %.200s", http_status, body.c_str());
         return ESP_FAIL;
@@ -227,9 +229,9 @@ static esp_err_t transcribe_once(const char* region, const char* key, const int1
 // One automatic retry: a dropped connection or a busy moment should not cost the member a whole
 // spoken request (weak Wi-Fi makes this more likely).
 esp_err_t transcribe(const char* region, const char* key, const int16_t* pcm, size_t samples,
-                     std::string& text, std::string* status, const char* language) {
+                     std::string& text, std::string* status, const char* language, const std::atomic<bool>* cancel) {
     esp_err_t err = transcribe_once(region, key, pcm, samples, text, status, language);
-    if (err != ESP_OK) {
+    if (err != ESP_OK && !(cancel && *cancel)) {  // no retry if the member has already given up
         ESP_LOGW(TAG, "stt failed (%s): retrying once", esp_err_to_name(err));
         vTaskDelay(pdMS_TO_TICKS(300));
         err = transcribe_once(region, key, pcm, samples, text, status, language);

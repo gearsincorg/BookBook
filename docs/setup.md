@@ -4,7 +4,7 @@ All settings are entered on a web page served by the device itself. They are sto
 
 ## First-time setup (no Wi-Fi saved yet)
 
-1. Power the device. After the start-up light sequence it shows **purple**: it is running its own Wi-Fi network.
+1. Power the device. After the start-up light sequence it stays on **spinning yellow** (still waiting, because it has no Wi-Fi to join): it is running its own Wi-Fi network.
 2. On a phone or PC, join the Wi-Fi network **BookBook-XXXX** (XXXX = the last four characters of the device's MAC address). Password: the value of `CONFIG_BOOKBOOK_SETUP_AP_PASSWORD` (default `bookbook1`; override it in your git-ignored `secrets/sdkconfig.secrets`).
 3. A setup page should open automatically. If not, browse to **http://192.168.4.1/**.
 4. Press **Scan for networks**, pick your Wi-Fi, enter its password, enter the library login, and press **Save**, then **Restart device**.
@@ -17,6 +17,20 @@ No page password is asked for on the setup network the first time, because you h
 Browse to **http://bookbook.local/** (or the IP address the device logs at start-up). The browser asks for a password: user name **admin**, and the factory default password (the value of `CONFIG_BOOKBOOK_ADMIN_PASSWORD`, `bookbook` unless you override it in your git-ignored `secrets/sdkconfig.secrets`) . The password is baked into the firmware and cannot be changed on the page.
 
 Note: this page is plain HTTP on your home network, so anyone on that network who knows the password can read and change the settings. Saved passwords are never sent back to the page (it only shows whether each is set).
+
+## What the LEDs mean
+
+Only two looks: **steady**, or **spinning**. A spinner is one bright LED circling the ring once a second with a
+fading 3-LED tail, and it always means the device is **waiting**.
+
+| LEDs | Meaning |
+|---|---|
+| red, green, blue, then spinning yellow | starting up (and still spinning yellow while it is not online). The intro is spoken in low red, then it turns green |
+| low green | ready for touch-to-talk |
+| low blue | the pad is touched: it is listening |
+| spinning blue | you let go: waiting for the answer |
+| low red | something is being spoken: the intro at start-up, or an answer |
+| low green again | finished, ready for the next touch |
 
 ## The button
 

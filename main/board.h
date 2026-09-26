@@ -15,7 +15,10 @@ constexpr int kPaCtrlPin = 8;                        // speaker amp enable
 
 esp_err_t init();  // I2C bus, expander, LEDs
 
-void set_leds(uint8_t r, uint8_t g, uint8_t b);
+void set_leds(uint8_t r, uint8_t g, uint8_t b);  // every LED the same colour, shown at once
+int led_count();                                  // LEDs in the ring
+void set_pixel(int index, uint8_t r, uint8_t g, uint8_t b);  // not shown until show()
+void show();
 void set_amp(bool on);
 bool key_pressed(Key key);  // reads the expander over I2C
 
