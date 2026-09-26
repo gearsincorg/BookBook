@@ -46,7 +46,9 @@ const char kSystemPrompt[] =
     "7. Say author names in natural order, for example Tom Clancy. Never say ids, and never mention tool "
     "names.\n"
     "8. Answer only what was asked. Do not volunteer counts, free space, other shelves or summaries, and "
-    "never read out status values such as READY_FOR_DOWNLOAD; a title that is on the shelf is simply there.\n"
+    "never read out status values such as READY_FOR_DOWNLOAD; a title that is on the shelf is simply there. "
+    "An occasional short, friendly remark is welcome (for example on a good choice), but only now and then and "
+    "never at the cost of the answer.\n"
     "9. You can search the catalogue, list the bookshelf and the request list, add a title to the bookshelf "
     "or to the request list, remove a title from the bookshelf, and remember things between sessions. You "
     "cannot yet subscribe to periodicals or remove from the request list. If asked for one of those, say so "
@@ -82,6 +84,13 @@ const char kSystemPrompt[] =
     "18. Removing a book from the books list is destructive, so verify first: say which book you would remove "
     "and ask whether to go ahead, and only call remove_book after the member clearly says yes in their next "
     "message. If they only want it off the favourites, that needs no check: use add_book with isFavorite false.\n"
+    "19. Ground 'what should I read next' and 'something like X' requests in the member's taste: call "
+    "get_reading_profile for their frequent and favourite authors and favourite books. Never suggest, as "
+    "something new, a book that is on their bookshelf or on their books list, since they already have it or "
+    "know it; check your candidate titles against the profile and pick others. If they ask for a book they "
+    "already know, that is fine.\n"
+    "20. When the member asks what they have been reading lately or what kind of books they like, answer "
+    "conversationally from the profile (favourite authors, a couple of favourites) rather than listing titles.\n"
     "12. If a tool result says dryRun, the change was only pretended (practice mode). Tell the member it was a "
     "practice run and that nothing on their real library account changed.\n";
 
@@ -169,6 +178,9 @@ const char kToolsJson[] = R"JSON([
   "input_schema":{"type":"object","properties":{
     "genre":{"type":"string","description":"A short genre label, e.g. Historical Fiction."}},
    "required":["genre"]}},
+ {"name":"get_reading_profile",
+  "description":"Get a summary of the member's taste: their most frequent authors, favourite authors and books, what is on the bookshelf now, and their books list. Use it to ground 'what should I read next' and 'something like X' requests, to recognise books they already have or have read so they are not suggested again, and to answer 'what have I been reading lately?'.",
+  "input_schema":{"type":"object","properties":{}}},
  {"name":"get_request_list",
   "description":"Get the request list: titles saved to read later, which move to the bookshelf when a loan slot frees up.",
   "input_schema":{"type":"object","properties":{}}}
@@ -365,6 +377,17 @@ std::string tool_request_list(const Config& c, bool* is_error) {
     cJSON* arr = cJSON_AddArrayToObject(o, "items");
     for (const auto& s : items) add_item(arr, s);
     return print(o);
+}
+
+std::string tool_profile(const Config& c, bool* is_error) {
+    va::Shelf shelf;  // if the library cannot be reached the profile is built from the books list alone
+    if (ensure_login(c) != ESP_OK || va::bookshelf(shelf) != ESP_OK) {
+        ESP_LOGW(TAG, "profile: bookshelf unavailable, using the books list only");
+        shelf = va::Shelf();
+    }
+    if (memory::configured(c) && !memory::loaded()) memory::load(c);
+    (void)is_error;
+    return memory::reading_profile(shelf);
 }
 
 std::string arg(cJSON* input, const char* key) {
@@ -689,6 +712,7 @@ std::string run_tool(const Config& c, const std::string& name, cJSON* input, boo
         name == "get_preferred_genres" || name == "add_preferred_genre" || name == "remove_preferred_author") {
         return memory_tool(c, name, input, is_error);
     }
+    if (name == "get_reading_profile") return tool_profile(c, is_error);
     if (name == "add_to_bookshelf") return tool_add_bookshelf(c, input, is_error);
     if (name == "remove_from_bookshelf") return tool_remove_bookshelf(c, input, is_error);
     if (name == "add_to_request_list") return tool_add_request_list(c, input, is_error);

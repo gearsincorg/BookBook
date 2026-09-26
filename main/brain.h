@@ -7,7 +7,7 @@
 // LibrarianOrchestrator (turn loop: user text -> Claude -> run any tool calls -> feed results back ->
 // repeat, capped at 5 round trips) and its persona rules.
 //
-// Tools: search_library, get_bookshelf, get_request_list, add_to_bookshelf, remove_from_bookshelf,
+// Tools: search_library, get_bookshelf, get_request_list, get_reading_profile, add_to_bookshelf, remove_from_bookshelf,
 // add_to_request_list. Changes honour Config::dry_run (practice mode) and are verified by re-reading the
 // shelf. Memory tools (preferences, favourite authors and genres, reading history and ratings) read and
 // write the shared memory file (see memory.h).

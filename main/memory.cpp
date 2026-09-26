@@ -4,7 +4,9 @@
 #include <cctype>
 #include <ctime>
 #include <functional>
+#include <map>
 #include <memory>
+#include <set>
 #include <vector>
 
 #include "cJSON.h"
@@ -390,6 +392,97 @@ esp_err_t remove_book(const Config& c, const std::string& title, std::string* ma
             }
         }
     });
+}
+
+std::string reading_profile(const va::Shelf& shelf) {
+    Lock lock;
+    struct Count {
+        std::string display;
+        int n = 0;
+    };
+    std::map<std::string, Count> authors;  // by lowercase natural name
+    auto count_author = [&](const std::string& natural) {
+        if (natural.empty()) return;
+        Count& c = authors[lower(natural)];
+        if (c.display.empty()) c.display = natural;
+        c.n++;
+    };
+
+    std::set<std::string> seen_ids, seen_titles;  // a book on the shelf and in the history counts once
+    cJSON* on_shelf = cJSON_CreateArray();
+    for (const auto& b : shelf.books) {
+        count_author(b.author);
+        if (!b.bookshare_id.empty()) seen_ids.insert(b.bookshare_id);
+        seen_titles.insert(lower(b.title));
+        cJSON* x = cJSON_CreateObject();
+        cJSON_AddStringToObject(x, "title", b.title.c_str());
+        if (!b.author.empty()) cJSON_AddStringToObject(x, "author", b.author.c_str());
+        cJSON_AddItemToArray(on_shelf, x);
+    }
+
+    // The books list: newest 60 entries by position, and the favourites (rated 4 or 5).
+    const cJSON* list = arr("ReadingHistory");
+    const int total = cJSON_GetArraySize(list);
+    cJSON* known = cJSON_CreateArray();
+    cJSON* favorites = cJSON_CreateArray();
+    for (int i = 0; i < total; i++) {
+        const cJSON* e = cJSON_GetArrayItem(list, i);
+        std::string title = str(e, "Title"), id = str(e, "BookshareId");
+        std::string who = va::natural_author(str(e, "Author"));
+        bool on_shelf_now = (!id.empty() && seen_ids.count(id)) || seen_titles.count(lower(title));
+        if (!on_shelf_now) count_author(who);  // shelf books were counted above
+        const cJSON* r = cJSON_GetObjectItemCaseSensitive(e, "Rating");
+        int rating = cJSON_IsNumber(r) ? r->valueint : 0;
+        if (i >= total - 60) {
+            cJSON* x = cJSON_CreateObject();
+            cJSON_AddStringToObject(x, "title", title.c_str());
+            if (!who.empty()) cJSON_AddStringToObject(x, "author", who.c_str());
+            if (rating) cJSON_AddNumberToObject(x, "rating", rating);
+            if (on_shelf_now) cJSON_AddBoolToObject(x, "onBookshelfNow", true);
+            cJSON_AddItemToArray(known, x);
+        }
+        if (rating >= 4 && cJSON_GetArraySize(favorites) < 30) {
+            cJSON* x = cJSON_CreateObject();
+            cJSON_AddStringToObject(x, "title", title.c_str());
+            if (!who.empty()) cJSON_AddStringToObject(x, "author", who.c_str());
+            cJSON_AddNumberToObject(x, "rating", rating);
+            cJSON_AddItemToArray(favorites, x);
+        }
+    }
+
+    std::vector<Count> ranked;
+    for (const auto& kv : authors) ranked.push_back(kv.second);
+    std::sort(ranked.begin(), ranked.end(), [](const Count& a, const Count& b) {
+        return a.n != b.n ? a.n > b.n : a.display < b.display;
+    });
+    cJSON* frequent = cJSON_CreateArray();
+    for (size_t i = 0; i < ranked.size() && i < 8; i++) {
+        cJSON* x = cJSON_CreateObject();
+        cJSON_AddStringToObject(x, "author", ranked[i].display.c_str());
+        cJSON_AddNumberToObject(x, "books", ranked[i].n);
+        cJSON_AddItemToArray(frequent, x);
+    }
+
+    cJSON* fav_authors = cJSON_CreateArray();
+    cJSON* other_authors = cJSON_CreateArray();
+    const cJSON* a;
+    cJSON_ArrayForEach(a, arr("PreferredAuthors")) {
+        std::string who = va::natural_author(str(a, "AuthorName"));
+        cJSON_AddItemToArray(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(a, "IsFavorite")) ? fav_authors : other_authors,
+                             cJSON_CreateString(who.c_str()));
+    }
+
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, "frequentAuthors", frequent);
+    cJSON_AddItemToObject(o, "favoriteAuthors", fav_authors);
+    cJSON_AddItemToObject(o, "otherAuthorsTheyKnow", other_authors);
+    cJSON_AddItemToObject(o, "favoriteBooks", favorites);
+    cJSON_AddItemToObject(o, "onBookshelfNow", on_shelf);
+    cJSON_AddItemToObject(o, "booksList", known);
+    cJSON_AddNumberToObject(o, "booksListSize", total);
+    cJSON_AddNumberToObject(o, "loanSlotsUsed", shelf.loan_count);
+    cJSON_AddNumberToObject(o, "loanSlotsTotal", va::kLoanCap);
+    return print(o);
 }
 
 esp_err_t rate(const Config& c, const std::string& title, int rating, std::string* matched_title, int* matches) {

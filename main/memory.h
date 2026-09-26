@@ -2,6 +2,7 @@
 #include <string>
 #include "config.h"
 #include "esp_err.h"
+#include "va.h"
 
 // Cross-session memory, shared with Bookworm. One JSON document (memory.json) in Azure Blob storage,
 // in exactly Bookworm's BookwormMemory format (PascalCase: ExplicitPreferences, ConversationNotes,
@@ -48,6 +49,12 @@ esp_err_t add_book(const Config& c, const std::string& title, const std::string&
 // Removes a book from the list entirely (title exactly, ignoring case, or a unique partial match).
 // ESP_ERR_NOT_FOUND if none match, ESP_ERR_INVALID_SIZE if several do (count in *matches).
 esp_err_t remove_book(const Config& c, const std::string& title, std::string* matched_title, int* matches);
+
+// A small, deterministic taste summary (Bookworm's ReaderProfile idea): the most frequent authors across the
+// bookshelf and the books list, favourite authors and books, what is on the shelf now, and the books list
+// (so already-owned or already-read titles are not suggested again). Genre and theme reasoning is left to
+// the model. Works without memory (then only the shelf is used).
+std::string reading_profile(const va::Shelf& shelf);
 
 std::string preferred_authors_json();std::string preferred_authors_json();
 std::string preferred_genres_json();
