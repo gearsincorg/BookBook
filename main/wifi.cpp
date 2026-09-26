@@ -24,6 +24,7 @@ constexpr int kConnected = BIT0;
 static bool s_started;
 static bool s_sta_enabled;
 static bool s_ap_enabled;
+static bool s_sta_dirty;  // station credentials changed since they were last applied
 static std::string s_sta_ssid, s_sta_pass, s_ap_ssid;
 static esp_netif_t* s_sta_netif;
 
@@ -31,6 +32,8 @@ static void on_event(void*, esp_event_base_t base, int32_t id, void* data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         if (s_sta_enabled) esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        auto* ev = static_cast<wifi_event_sta_disconnected_t*>(data);
+        ESP_LOGW(TAG, "disconnected from \"%.32s\", reason %d", reinterpret_cast<const char*>(ev->ssid), ev->reason);
         xEventGroupClearBits(s_events, kConnected);
         if (s_sta_enabled) esp_wifi_connect();  // always retry; this device is mains powered
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
@@ -46,7 +49,12 @@ static esp_err_t apply() {
     esp_err_t err = esp_wifi_set_mode(mode);
     if (err != ESP_OK) return err;
 
-    if (s_sta_enabled) {
+    // Only touch the STA settings when they changed. Re-setting them while the station is still trying
+    // to connect fails ("sta is connecting"), and that error used to abort enable_ap() before the setup
+    // network was configured, so a failed Wi-Fi join left the board with no setup network at all.
+    const bool sta_changed = s_sta_enabled && s_sta_dirty;
+    if (sta_changed) {
+        s_sta_dirty = false;
         wifi_config_t sta = {};
         strncpy(reinterpret_cast<char*>(sta.sta.ssid), s_sta_ssid.c_str(), sizeof(sta.sta.ssid) - 1);
         strncpy(reinterpret_cast<char*>(sta.sta.password), s_sta_pass.c_str(), sizeof(sta.sta.password) - 1);
@@ -69,7 +77,7 @@ static esp_err_t apply() {
         if (err != ESP_OK) return err;
         s_started = true;
         esp_wifi_set_ps(WIFI_PS_NONE);
-    } else if (s_sta_enabled) {
+    } else if (sta_changed) {
         esp_wifi_connect();
     }
     return ESP_OK;
@@ -98,6 +106,7 @@ esp_err_t start_sta(const char* ssid, const char* password, int timeout_ms) {
     s_sta_ssid = ssid;
     s_sta_pass = password;
     s_sta_enabled = true;
+    s_sta_dirty = true;
     esp_err_t err = apply();
     if (err != ESP_OK) return err;
     EventBits_t bits = xEventGroupWaitBits(s_events, kConnected, pdFALSE, pdTRUE, pdMS_TO_TICKS(timeout_ms));
