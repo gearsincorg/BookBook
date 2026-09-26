@@ -19,14 +19,19 @@ constexpr Colour kBlueBright = {0, 0, 130};
 constexpr Colour kGreenLow = {0, 18, 0};
 constexpr Colour kBlueLow = {0, 0, 22};
 constexpr Colour kRedLow = {24, 0, 0};
+constexpr Colour kYellowLow = {30, 20, 0};  // the single "update available" LED beside the green
 
+constexpr int kFlashPeriodMs = 500;  // 2 Hz: the whole ring on for a quarter of a second, then off
 constexpr int kSpinPeriodMs = 2000;  // one lap per two seconds (slower hides small Wi-Fi-induced hiccups)
 // The head, then a 3-LED tail of diminishing intensity (share of the head's brightness).
 constexpr float kTrail[] = {1.0f, 0.45f, 0.20f, 0.08f};
 
+enum class Mode { Solid, Spin, Flash };
+
 struct State {
-    bool spin = false;
+    Mode mode = Mode::Solid;
     Colour colour = {0, 0, 0};
+    bool accent = false;  // Solid only: LED 0 in kYellowLow (update available)
     unsigned serial = 0;  // bumped on every change so the task knows to redraw
 };
 
@@ -34,11 +39,11 @@ portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 State s_state;
 TaskHandle_t s_task;
 
-void set(bool spin, Colour c, const char* what) {
+void set(Mode mode, Colour c, const char* what, bool accent = false) {
     portENTER_CRITICAL(&s_mux);
     unsigned next = s_state.serial + 1;
-    bool changed = s_state.spin != spin || s_state.colour.r != c.r || s_state.colour.g != c.g || s_state.colour.b != c.b;
-    s_state = {spin, c, next};
+    bool changed = s_state.mode != mode || s_state.accent != accent || s_state.colour.r != c.r || s_state.colour.g != c.g || s_state.colour.b != c.b;
+    s_state = {mode, c, accent, next};
     portEXIT_CRITICAL(&s_mux);
     if (changed) ESP_LOGI(TAG, "%s", what);
 }
@@ -63,7 +68,15 @@ void animation_task(void*) {
         s = s_state;
         portEXIT_CRITICAL(&s_mux);
 
-        if (s.spin) {
+        if (s.mode == Mode::Flash) {
+            int64_t ms = esp_timer_get_time() / 1000;
+            int phase = static_cast<int>(ms % kFlashPeriodMs) * 2 / kFlashPeriodMs;  // 0 = on, 1 = off
+            if (s.serial != drawn || phase != last_head) {
+                board::set_leds(phase == 0 ? s.colour.r : 0, phase == 0 ? s.colour.g : 0, phase == 0 ? s.colour.b : 0);
+                last_head = phase;
+                drawn = s.serial;
+            }
+        } else if (s.mode == Mode::Spin) {
             const int n = board::led_count();
             int64_t ms = esp_timer_get_time() / 1000;
             int head = static_cast<int>((ms % kSpinPeriodMs) * n / kSpinPeriodMs);
@@ -76,7 +89,15 @@ void animation_task(void*) {
                 drawn = s.serial;
             }
         } else if (s.serial != drawn) {
-            board::set_leds(s.colour.r, s.colour.g, s.colour.b);
+            if (s.accent) {
+                for (int i = 0; i < board::led_count(); i++) {
+                    const Colour& c = i == 0 ? kYellowLow : s.colour;
+                    board::set_pixel(i, c.r, c.g, c.b);
+                }
+                board::show();
+            } else {
+                board::set_leds(s.colour.r, s.colour.g, s.colour.b);
+            }
             last_head = -1;
             drawn = s.serial;
         }
@@ -93,7 +114,7 @@ void start() {
     if (!s_task) xTaskCreate(animation_task, "leds", 3072, nullptr, 8, &s_task);
 }
 
-void solid(unsigned char r, unsigned char g, unsigned char b) { set(false, {r, g, b}, "solid"); }
+void solid(unsigned char r, unsigned char g, unsigned char b) { set(Mode::Solid, {r, g, b}, "solid"); }
 
 void boot_sequence() {
     solid(40, 0, 0);
@@ -105,10 +126,14 @@ void boot_sequence() {
     waiting();
 }
 
-void waiting() { set(true, kYellowBright, "spinning yellow: waiting"); }
-void ready() { set(false, kGreenLow, "green: ready for touch-to-talk"); }
-void listening() { set(false, kBlueLow, "blue: listening"); }
-void thinking() { set(true, kBlueBright, "spinning blue: waiting for the answer"); }
-void speaking() { set(false, kRedLow, "red: speaking"); }
+void waiting() { set(Mode::Spin, kYellowBright, "spinning yellow: waiting"); }
+void ready(bool update_available) {
+    set(Mode::Solid, kGreenLow, update_available ? "green with one yellow LED: ready, update available" : "green: ready for touch-to-talk",
+        update_available);
+}
+void listening() { set(Mode::Solid, kBlueLow, "blue: listening"); }
+void thinking() { set(Mode::Spin, kBlueBright, "spinning blue: waiting for the answer"); }
+void speaking() { set(Mode::Solid, kRedLow, "red: speaking"); }
+void updating() { set(Mode::Flash, kYellowBright, "flashing yellow: downloading an update"); }
 
 }  // namespace leds

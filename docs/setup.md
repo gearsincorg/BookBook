@@ -57,3 +57,15 @@ BookBook is a single-user device, so the setup page only edits the member's **en
 Everything the program itself needs is **baked into the firmware at build time** from the git-ignored `secrets/sdkconfig.secrets`, and cannot be changed on the device: `CONFIG_BOOKBOOK_AZURE_SPEECH_KEY` / `_REGION`, `CONFIG_BOOKBOOK_ANTHROPIC_KEY`, `CONFIG_BOOKBOOK_MEMORY_URL` (a container-scoped SAS URL: the storage account key never goes on the device), `CONFIG_BOOKBOOK_ADMIN_PASSWORD`, `CONFIG_BOOKBOOK_SETUP_AP_PASSWORD` and `CONFIG_BOOKBOOK_PRACTICE_MODE` (pretend to add/remove books). Change one by editing that file, clearing the generated `sdkconfig`, and reflashing. Older builds saved some of these on the device; they are erased from its saved settings at start-up.
 
 Nothing on the device is encrypted, so anyone who copies its flash memory can read the baked-in keys.
+
+## Updating the firmware over the air
+
+An update is only ever installed when the member asks for it out loud ("is there an update?", "update yourself"). Nothing checks or installs by itself.
+
+**Publishing (developer):** build, then run `python tools/publish_firmware.py`. It uploads `build/bookbook.bin` and then a small manifest, `bookbook.json`, to the same storage container as `memory.json`, using the SAS URL in `secrets/sdkconfig.secrets` (which needs create and write permission). `--dry-run` shows what would be published and `--status` shows what is published now. Uploading a different build is what makes an update "available": the device compares the image's ELF hash, so no version number needs bumping.
+
+**On the device:** shortly after start-up it quietly checks for an update, and if there is one the green ready light gets a single low-yellow LED (nothing is said). "Is there an update?" reads only the manifest. "Update yourself" queues the install; it starts once the announcement has been spoken, with the whole ring **flashing yellow (2 Hz)** while it downloads, and the device restarts. After the restart it says "The update is complete" before its greeting. If the download or the image is bad, it says so straight away and carries on as before; if the new image crashes and the bootloader goes back, the next start says "The update did not work, so I have gone back to my previous version". A new image must run for a minute to be kept; if it crashes or resets before then, the bootloader goes back to the previous image (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`).
+
+The first build with OTA support must be flashed over USB (the bootloader changes). After that, updates can go over the air.
+
+The image contains the baked-in keys, so the container must stay private. It is reachable only with the SAS token, which is already inside the firmware.

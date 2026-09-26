@@ -6,7 +6,7 @@ Status: Phase 0 (bring-up) builds. See [docs/decisions.md](docs/decisions.md) fo
 
 ## Build
 
-ESP-IDF 5.5 (C++). From a PowerShell prompt with IDF activated:
+ESP-IDF 5.5 (C++). `tools\idf.ps1` runs `idf.py` with this project's IDF 5.5 whatever the shell has activated (edit the two paths at its top if the install moves), for example `.\tools\idf.ps1 build` or `.\tools\idf.ps1 -p COM5 flash monitor`. Or, from a PowerShell prompt with IDF 5.5 activated:
 
     idf.py set-target esp32s3
     idf.py build

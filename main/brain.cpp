@@ -13,6 +13,7 @@
 #include "freertos/semphr.h"
 #include "sdkconfig.h"
 #include "memory.h"
+#include "ota.h"
 #include "va.h"
 
 static const char* TAG = "brain";
@@ -153,7 +154,15 @@ const char kSystemPrompt[] =
     "bookshelf and need its id and format.\n"
     // == Practice mode ==
     "29. If a tool result says dryRun, the change was only pretended (practice mode). Tell the member it was "
-    "a practice run and that nothing on their real library account changed.\n";
+    "a practice run and that nothing on their real library account changed.\n"
+    // == Updating yourself ==
+    "30. You can update your own software when the member asks. Never update on your own initiative and never "
+    "mention updates unprompted. If they ask whether an update is available, call check_for_update and answer "
+    "in a sentence. If they ask you to update, or to install it, call install_update: it starts as soon as you "
+    "have finished speaking, takes less than a minute and restarts you, so say that in one short sentence, for "
+    "example 'Updating now. I will be back in less than a minute.' If install_update says there is nothing to "
+    "install, say you are already up to date. Do not read out version strings or build times; a date is "
+    "enough if they ask which version is newer.\n";
 
 const char kToolsJson[] = R"JSON([
  {"name":"search_library",
@@ -282,6 +291,12 @@ const char kToolsJson[] = R"JSON([
    "required":["title"]}},
  {"name":"get_request_list",
   "description":"Get the request list: titles saved to read later, which move to the bookshelf when a loan slot frees up.",
+  "input_schema":{"type":"object","properties":{}}},
+ {"name":"check_for_update",
+  "description":"Check whether a newer version of your own software has been published. Only when the member asks about updates. Changes nothing.",
+  "input_schema":{"type":"object","properties":{}}},
+ {"name":"install_update",
+  "description":"Install the published update to your own software. Only when the member has asked you to update. It starts after you have finished speaking, takes less than a minute, and restarts you.",
   "input_schema":{"type":"object","properties":{}}}
 ])JSON";
 
@@ -717,6 +732,34 @@ std::string tool_get_subscriptions(const Config& c, bool* is_error) {
     return print(o);
 }
 
+std::string tool_check_update(const Config& c, bool* is_error) {
+    ota::Info info;
+    esp_err_t err = ota::check(c, info);
+    if (err == ESP_ERR_NOT_FOUND) return "No update has been published.";
+    if (err != ESP_OK) {
+        *is_error = true;
+        return "Could not check for an update.";
+    }
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "updateAvailable", info.available);
+    cJSON_AddStringToObject(o, "runningBuilt", info.running_built.c_str());
+    cJSON_AddStringToObject(o, "publishedBuilt", info.new_built.c_str());
+    return print(o);
+}
+
+std::string tool_install_update(const Config& c, bool* is_error) {
+    ota::Info info;
+    esp_err_t err = ota::check(c, info);
+    if (err == ESP_ERR_NOT_FOUND) return "No update has been published, so there is nothing to install.";
+    if (err != ESP_OK) {
+        *is_error = true;
+        return "Could not check for an update, so nothing was started.";
+    }
+    if (!info.available) return "Already up to date: there is nothing to install.";
+    ota::request_install();
+    return "The update will start as soon as you have finished speaking. Tell the member it takes less than a minute and you will be back after a restart.";
+}
+
 bool has_subscription(const std::vector<va::Subscription>& subs, const std::string& id) {
     for (const auto& s : subs) if (s.series_id == id) return true;
     return false;
@@ -1030,6 +1073,8 @@ std::string run_tool(const Config& c, const std::string& name, cJSON* input, boo
     if (name == "get_bookshelf") return tool_bookshelf(c, is_error);
     if (name == "get_request_list") return tool_request_list(c, is_error);
     if (name == "get_subscriptions") return tool_get_subscriptions(c, is_error);
+    if (name == "check_for_update") return tool_check_update(c, is_error);
+    if (name == "install_update") return tool_install_update(c, is_error);
     if (name == "subscribe_to_periodical") return tool_subscribe(c, input, is_error);
     if (name == "unsubscribe_from_periodical") return tool_unsubscribe(c, input, is_error);
     *is_error = true;

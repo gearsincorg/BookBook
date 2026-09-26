@@ -24,3 +24,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 # touch.cpp uses the legacy touch driver (driver/touch_pad.h), as PhilbotSays does; silence its
 # deprecation #warning since we are using it deliberately.
 CONFIG_TOUCH_SUPPRESS_DEPRECATE_WARN=y
+
+# OTA: a newly installed image must call ota::mark_valid() (after a minute of running well) or the bootloader
+# goes back to the previous one on the next reset. Needs the bootloader rebuilt: flash everything once over USB.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

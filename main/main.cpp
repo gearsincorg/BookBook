@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "memory.h"
 #include "mic.h"
+#include "ota.h"
 #include <string>
 #include <vector>
 #include "thinking.h"
@@ -24,9 +25,14 @@
 
 static const char* TAG = "bookbook";
 
+// Set by the start-up warm-up when the published firmware differs from the running one. Never spoken: the ready
+// light just gets one yellow LED. s_update_led_dirty asks the main loop to redraw the idle light.
+static std::atomic<bool> s_update_available{false};
+static std::atomic<bool> s_update_led_dirty{false};
+
 // Ready (green) once online, otherwise still waiting (spinning yellow), for example before Wi-Fi is up.
 static void show_idle_state() {
-    if (wifi::connected()) leds::ready();
+    if (wifi::connected()) leds::ready(s_update_available);
     else leds::waiting();
 }
 
@@ -90,6 +96,17 @@ static void turn_task(void* arg) {
     vTaskDelete(nullptr);
 }
 
+// An update the member asked for (brain tool install_update) runs once its announcement has been spoken, here
+// rather than inside the turn, so the download is not cut short by the turn's time limit. Restarts on success.
+static void run_pending_update(const Config& c) {
+    if (!ota::install_requested()) return;
+    ota::cancel_install();
+    leds::updating();  // flashing yellow while it downloads
+    std::string why;
+    ota::install(c, &why);  // does not return on success
+    say(c, "Sorry, the update did not work, so I am carrying on as I was.");
+}
+
 // Push-to-talk turn: transcribe what was recorded, ask the librarian brain (Claude with library tools), and
 // speak the answer. Returns true if the pad is still touched when it ends because the touch that aborted it
 // (or stopped the answer) is still down: the caller must ignore that press's release.
@@ -130,6 +147,7 @@ static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm) {
     }
     if (aborted || timed_out) turn->cancel = true;  // the task stops at its next step and discards its result
     thinking::stop();
+    if (aborted || timed_out) ota::cancel_install();  // an abandoned turn must not go on to install anything
     if (aborted) {
         ESP_LOGI(TAG, "turn aborted by a touch");
         return true;
@@ -140,6 +158,7 @@ static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm) {
         return key_cancel();
     }
     say(c, turn->spoken);
+    run_pending_update(c);
     return key_cancel();
 }
 
@@ -158,6 +177,12 @@ static void warmup_task(void* arg) {
         std::string why;
         ESP_LOGI(TAG, "library sign-in at startup: %s",
                  esp_err_to_name(va::ensure_logged_in(cfg.va_user, cfg.va_password, &why)));
+    }
+    // Last, so it does not compete with the connections above. Silent: only the ready light shows the result.
+    ota::Info update;
+    if (ota::check(cfg, update) == ESP_OK && update.available) {
+        s_update_available = true;
+        s_update_led_dirty = true;
     }
     ESP_LOGI(TAG, "warm-up finished in %d ms", static_cast<int>((esp_timer_get_time() - t0) / 1000));
     vTaskDelete(nullptr);
@@ -201,10 +226,21 @@ extern "C" void app_main() {
     if (online) {
         ESP_LOGI(TAG, "time sync: %s", esp_err_to_name(wifi::sync_time(15000)));
         ESP_LOGI(TAG, "setup page: http://%s/ or http://bookbook.local/", wifi::ip().c_str());
+        // After an update the restart is the only place the result is known: say it before the greeting.
+        std::string intro = "Hi! I'm Marian, your librarian. When the lights are green, just press and hold to talk to me.";
+        switch (ota::take_boot_report()) {
+            case ota::BootReport::Updated:
+                intro = "The update is complete. " + intro;
+                break;
+            case ota::BootReport::RolledBack:
+                intro = "The update did not work, so I have gone back to my previous version. " + intro;
+                break;
+            case ota::BootReport::None:
+                break;
+        }
         if (!cfg.azure_key.empty()) {
             leds::speaking();  // low red while the intro is spoken, like any spoken answer
-            azure::speak(cfg.azure_region.c_str(), cfg.azure_key.c_str(),
-                         "Hi Bruce. Press and hold to talk, when the lights are green.");
+            azure::speak(cfg.azure_region.c_str(), cfg.azure_key.c_str(), intro.c_str());
         }
         // Memory and library sign-in prepare the first request; they run in the background so the LEDs go
         // green (ready for press-to-talk) as soon as the greeting has finished.
@@ -259,6 +295,8 @@ extern "C" void app_main() {
             show_idle_state();  // back to green, ready for the next touch
         }
         was_down = down;
+        if (!down && s_update_led_dirty.exchange(false)) show_idle_state();
+        if (now_ms > 60000) ota::mark_valid();  // a freshly installed image has now run a minute: keep it
         if (!down && wifi::connected() != last_online) {
             last_online = wifi::connected();
             show_idle_state();
