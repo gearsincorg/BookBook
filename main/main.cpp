@@ -204,10 +204,10 @@ extern "C" void app_main() {
         if (!cfg.azure_key.empty()) {
             leds::speaking();  // low red while the intro is spoken, like any spoken answer
             azure::speak(cfg.azure_region.c_str(), cfg.azure_key.c_str(),
-                         "Hi Bruce. Use Press-To-talk to make changes to your library.");
+                         "Hi Bruce. Press and hold to talk, when the lights are green.");
         }
         // Memory and library sign-in prepare the first request; they run in the background so the LEDs go
-        // blue (ready for press-to-talk) as soon as the greeting has finished.
+        // green (ready for press-to-talk) as soon as the greeting has finished.
         xTaskCreate(warmup_task, "warmup", 12288, &cfg, 4, nullptr);
     }
     show_idle_state();
