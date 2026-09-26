@@ -384,12 +384,15 @@ esp_err_t search(const std::string& keyword, SearchResult& out, int limit, const
     if (err != ESP_OK) return err;
     JsonPtr root(raw);
     const cJSON* data = cJSON_GetObjectItemCaseSensitive(root.get(), "data");
-    const cJSON* tab = cJSON_GetObjectItemCaseSensitive(data, "bookTab");
+    const std::string kind = type;
+    const bool periodical = kind == "Magazine" || kind == "Newspaper" || kind == "Podcast";
+    const cJSON* tab = cJSON_GetObjectItemCaseSensitive(data, periodical ? "periodicalTab" : "bookTab");
     out.total = jint(tab, "total");
     const cJSON* item;
     cJSON_ArrayForEach(item, cJSON_GetObjectItemCaseSensitive(tab, "listArticle")) {
         BookHit h;
-        h.bookshare_id = jstr(item, "bookshareId");
+        h.bookshare_id = periodical ? jstr(item, "seriesId") : jstr(item, "bookshareId");
+        if (h.bookshare_id.empty()) h.bookshare_id = jstr(item, "bookshareId");
         h.title = jstr(item, "title");
         const cJSON* a;
         cJSON_ArrayForEach(a, cJSON_GetObjectItemCaseSensitive(item, "authors")) {
@@ -426,6 +429,15 @@ esp_err_t bookshelf(Shelf& out) {
         ShelfItem s;
         parse_shelf_item(item, s);
         out.books.push_back(std::move(s));
+    }
+    cJSON_ArrayForEach(item, cJSON_GetObjectItemCaseSensitive(data, "periodicals")) {
+        const cJSON* p = cJSON_GetObjectItemCaseSensitive(item, "periodical");
+        ShelfItem s;
+        parse_shelf_item(item, s);
+        s.active_title_id = jstr(p, "seriesId");  // the issue's own id, which is what removal wants
+        s.issue_date = jstr(p, "publicationDate");
+        if (s.title.empty()) s.title = jstr(p, "title");
+        out.periodicals.push_back(std::move(s));
     }
     return ESP_OK;
 }
@@ -484,6 +496,15 @@ esp_err_t remove_from_bookshelf(const std::string& active_title_id, const std::s
                       &body, reply);
 }
 
+esp_err_t remove_periodical_issue(const std::string& issue_id, std::string* reply) {
+    Lock lock;
+    std::string id = safe_segment(issue_id);
+    if (id.empty()) return ESP_ERR_INVALID_ARG;
+    std::string body = "periodical_active_title_ids=" + id;
+    return write_call(HTTP_METHOD_POST, "/library/my-periodical/remove/all", "application/x-www-form-urlencoded; charset=UTF-8",
+                      &body, reply);
+}
+
 esp_err_t add_to_request_list(const std::string& bookshare_id, std::string* reply) {
     Lock lock;
     std::string id = safe_segment(bookshare_id);
@@ -508,6 +529,44 @@ esp_err_t request_list(std::vector<ShelfItem>& out, int* total) {
         out.push_back(std::move(s));
     }
     return ESP_OK;
+}
+
+esp_err_t subscriptions(std::vector<Subscription>& out) {
+    Lock lock;
+    out.clear();
+    cJSON* raw = nullptr;
+    esp_err_t err = call_json(HTTP_METHOD_GET, "/library/my-library/subscription?limit=20&currentPage=1", nullptr, nullptr, &raw);
+    if (err != ESP_OK) return err;
+    JsonPtr root(raw);
+    const cJSON* data = cJSON_GetObjectItemCaseSensitive(root.get(), "data");
+    const cJSON* item;  // "subscriptions" is an empty string, not an array, when there are none
+    cJSON_ArrayForEach(item, cJSON_GetObjectItemCaseSensitive(data, "subscriptions")) {
+        Subscription s;
+        s.series_id = jstr(cJSON_GetObjectItemCaseSensitive(item, "series"), "seriesId");
+        if (s.series_id.empty()) s.series_id = jstr(item, "activeTitleId");
+        s.title = jstr(item, "title");
+        s.format = jstr(item, "formatName");
+        s.kind = jstr(item, "titleContentType");
+        out.push_back(std::move(s));
+    }
+    return ESP_OK;
+}
+
+esp_err_t subscribe(const std::string& series_id, const std::string& format, const std::string& title, std::string* reply) {
+    Lock lock;
+    std::string id = safe_segment(series_id), fmt = safe_segment(format);
+    if (id.empty() || fmt.empty()) return ESP_ERR_INVALID_ARG;
+    std::string path = "/library/my-library/subscription/add/?seriesId=" + id + "&format=" + fmt + "&editionId=" + id +
+                       "&seriesTitle=" + url_encode(title);
+    return write_call(HTTP_METHOD_POST, path, nullptr, nullptr, reply);
+}
+
+esp_err_t unsubscribe(const std::string& series_id, std::string* reply) {
+    Lock lock;
+    std::string id = safe_segment(series_id);
+    if (id.empty()) return ESP_ERR_INVALID_ARG;
+    return write_call(HTTP_METHOD_DELETE, "/library/my-library/subscription/remove/" + id + "?limit=20&currentPage=1", nullptr,
+                      nullptr, reply);
 }
 
 }  // namespace va

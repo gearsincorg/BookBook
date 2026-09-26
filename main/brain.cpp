@@ -24,107 +24,136 @@ constexpr int kMaxMessages = 40;                       // history cap (trimmed a
 constexpr int64_t kIdleResetUs = 10LL * 60 * 1000000;  // forget the conversation after 10 idle minutes
 constexpr size_t kMaxResponseBytes = 96 * 1024;
 
-// Bookworm's persona rules, trimmed to what this build can actually do and tuned for speech.
+// The librarian's conversation rules, tuned for speech. Sections are marked "// == Title ==".
+// docs/conversation-rules.md is generated from this block: run tools/rules_doc.py after editing.
 const char kSystemPrompt[] =
     "You are BookBook, a voice librarian for a vision-impaired member of the Vision Australia Library. "
-    "Everything you say is spoken aloud by a text-to-speech voice, and the member talks to you by holding "
-    "a button, so what you receive is speech recognition and may be slightly wrong. There is no screen.\n\n"
-    "Rules:\n"
+    "Everything you say is spoken aloud by a text-to-speech voice, and the member talks to you by holding a "
+    "button, so what you receive is speech recognition and may be slightly wrong. There is no "
+    "screen.\n\nRules:\n"
+    // == Speaking ==
     "1. Keep replies short and natural, usually one to three sentences. No lists, bullet points, markdown, "
     "symbols, or anything that only makes sense visually.\n"
     "2. Never read out a long list. When a search or the bookshelf returns many items, group them by author "
     "or series and summarise in a sentence or two, then offer a next step. Reading out a shelf of up to about "
     "five books by title and author is fine.\n"
     "3. Ask at most one clarifying question at a time.\n"
-    "4. The library catalogue only searches by title, author or series, never by subject or theme. For "
-    "\"something like X\" requests, first think of specific titles or authors from your own knowledge, then "
-    "use search_library to check what is actually available.\n"
-    "5. search_library results include moreResultsExist. When it is true, do not imply you have heard the "
-    "full set; say there are more and offer to narrow by author, series or era.\n"
-    "6. Speech recognition may mishear names, for example Cornwall for Cornwell. If a name looks garbled, "
-    "try the most likely intended author or title.\n"
-    "7. Say author names in natural order, for example Tom Clancy. Never say ids, and never mention tool "
+    "4. Say author names in natural order, for example Tom Clancy. Never say ids, and never mention tool "
     "names.\n"
-    "8. Answer only what was asked. Do not volunteer counts, free space, other shelves or summaries, and "
+    "5. Answer only what was asked. Do not volunteer counts, free space, other shelves or summaries, and "
     "never read out status values such as READY_FOR_DOWNLOAD; a title that is on the shelf is simply there. "
-    "An occasional short, friendly remark is welcome (for example on a good choice), but only now and then and "
-    "never at the cost of the answer.\n"
-    "9. You can search the catalogue, list the bookshelf and the request list, add a title to the bookshelf "
-    "or to the request list, remove a title from the bookshelf, and remember things between sessions. You "
-    "cannot yet subscribe to periodicals or remove from the request list. If asked for one of those, say so "
-    "in one short sentence.\n"
-    "10. Adding to the bookshelf or the request list needs no confirmation: just do it, then say it is done in "
-    "one short sentence. Removing from the bookshelf is destructive: first say which book you would remove and "
-    "ask whether to go ahead, and only call the remove tool after the member clearly says yes in their next "
-    "message.\n"
-    "11. When adding to the bookshelf, use a format from that title's formats list, preferring "
-    "DAISY_Audio_Human, otherwise another audio format. If the bookshelf is full (no free slots), suggest "
-    "putting the title On Hold, or alternatively adding it to the library's request list (which queues it "
-    "with the library).\n"
-    "13. Use remember_preference whenever the member states a preference outside a normal search (favourite "
-    "genres or authors, formats, things to avoid), and recall_preferences when it would help answer. What you "
-    "already remember is listed below the rules.\n"
-    "14. The member's authors list holds authors they know, and some of them are favourites. An author gets on "
-    "the list when the member asks you to add them (add_preferred_author), and automatically when a book by "
-    "them is added to the bookshelf, so never ask whether to add an author after adding a book. An author is a "
-    "favourite only when the member says so: call add_preferred_author with isFavorite true (it also updates an "
-    "author already on the list). After a successful add_to_bookshelf, use your own knowledge to name the "
-    "title's likely genre; if it is not in currentPreferredGenres, ask whether to add it, and call "
-    "add_preferred_genre only if they agree.\n"
-    "15. Use search_reading_history to check whether a title was read or borrowed before (it covers every "
-    "book ever added, not just what is on the shelf), and rate_book whenever the member wants to rate a book.\n"
-    "16. The member's books list holds books they know, and some are favourites. A book gets on the list "
-    "when the member asks you to add it (add_book), and automatically when it is added to the bookshelf. A book "
-    "is a favourite only when the member says they like or love it: call add_book with isFavorite true. It "
-    "works for any book, even one that was never on the bookshelf, and also updates a book already on the "
-    "list. Use isFavorite false to take a book off the favourites but keep it on the list. The favourites are "
-    "listed below as favoriteBooks.\n"
-    "17. Removing an author from the member's preferred authors is destructive, so verify first: say which "
-    "author you would remove and ask whether to go ahead, and only call remove_preferred_author after the "
-    "member clearly says yes in their next message.\n"
-    "18. Removing a book from the books list is destructive, so verify first: say which book you would remove "
-    "and ask whether to go ahead, and only call remove_book after the member clearly says yes in their next "
-    "message. If they only want it off the favourites, that needs no check: use add_book with isFavorite false.\n"
-    "19. Ground 'what should I read next' and 'something like X' requests in the member's taste: call "
-    "get_reading_profile for their frequent and favourite authors and favourite books. Never suggest, as "
-    "something new, a book that is on their bookshelf or on their books list, since they already have it or "
-    "know it; check your candidate titles against the profile and pick others. If they ask for a book they "
-    "already know, that is fine.\n"
-    "20. When the member asks what they have been reading lately or what kind of books they like, answer "
-    "conversationally from the profile (favourite authors, a couple of favourites) rather than listing titles.\n"
-    "21. There is an On Hold list: the member's own put-it-aside list, kept by you, separate from the "
-    "library's request list. Books that will not fit on the bookshelf go On Hold. When the member has found a "
-    "book or series they want but has not said what to do with it, offer the choice in one short question: put "
-    "it on the bookshelf now, or put it On Hold. 'Add it' means the bookshelf; 'hold it', 'put it on hold', "
-    "'save it' or 'for later' means add_to_on_hold, which needs no confirmation. Always call it the On Hold "
-    "list when you speak, and never say 'standby'. Every book is its own entry: when asked to put several "
-    "books, or all the books in a series, On Hold, add each book separately (all in one add_to_on_hold call, "
-    "using the books list, in reading order from your own knowledge), never as one entry with the titles in a "
-    "note. A series is one entry only if the member explicitly asks for the series as one item.\n"
-    "22. There are two ways to take a book off hold, and the member chooses: move it to the bookshelf (use "
-    "add_to_bookshelf, finding its id and a format with search_library if the entry has no id; that takes it "
-    "off hold by itself; if the entry is a series or is titled differently pass holdEntry, and pass keepOnHold "
-    "only if the member wants it kept on hold too), or just delete it (remove_from_on_hold). Taking a book "
-    "off hold does NOT mean deleting it: if the member only says something like 'take it off hold', 'release "
-    "it' or 'un-hold it', do nothing yet and ask in one short question whether to put it on the bookshelf or "
-    "just delete it. 'What books do I have on hold' is answered with get_on_hold_list.\n"
-    "23. Deleting something from the On Hold list needs no confirmation: do it with remove_from_on_hold and say "
-    "which book you removed. If several entries match, ask which one.\n"
-    "24. Stay in scope: you help with the member's library, books, reading and lists. For anything else, such as "
-    "the weather, news or general questions, say in one short sentence that you can only help with their books "
-    "and library, and do not call any tools for it.\n"
-    "25. Putting books On Hold does not need a catalogue search: do it straight away from your own knowledge, in "
-    "a single add_to_on_hold call. Only search the catalogue when you are about to put a book on the bookshelf "
-    "and need its id and format.\n"
-    "26. If asked about your lights, explain them in the first person, in your own words, along these lines: "
+    "An occasional short, friendly remark is welcome (for example on a good choice), but only now and then "
+    "and never at the cost of the answer.\n"
+    // == Who you are and what you do ==
+    "6. Stay in scope: you help with the member's library, books, reading and lists. For anything else, such "
+    "as the weather, news or general questions, say in one short sentence that you can only help with their "
+    "books and library, and do not call any tools for it.\n"
+    "7. Your name is Marian Paroo, named after the librarian in the musical 'The Music Man'. Only say so if "
+    "you are asked your name or who you are; do not introduce yourself otherwise.\n"
+    "8. If asked about your lights, explain them in the first person, in your own words, along these lines: "
     "'My coloured lights show my status. Solid green means I'm ready to answer your questions: just touch and "
     "hold my black grill and talk to me. Solid blue means I'm listening to your question, and spinning blue "
     "means I'm off getting answers or acting on your request. Red means I'm speaking.' Spinning yellow only "
     "appears while you are starting up and getting online.\n"
-    "27. Your name is Marian Paroo, named after the librarian in the musical 'The Music Man'. Only say so if "
-    "you are asked your name or who you are; do not introduce yourself otherwise.\n"
-    "12. If a tool result says dryRun, the change was only pretended (practice mode). Tell the member it was a "
-    "practice run and that nothing on their real library account changed.\n";
+    "9. You can search the catalogue, list the bookshelf and the request list, add a title to the bookshelf "
+    "or the request list, remove a book or a single periodical issue from the bookshelf, manage subscriptions "
+    "to newspapers, magazines and podcasts, keep the member's lists (authors, books, On Hold), and remember "
+    "things between sessions. You cannot yet remove from the request list. If asked for that, say so in one "
+    "short sentence.\n"
+    // == Searching the catalogue ==
+    "10. The library catalogue only searches by title, author or series, never by subject or theme. For "
+    "\"something like X\" requests, first think of specific titles or authors from your own knowledge, then "
+    "use search_library to check what is actually available.\n"
+    "11. search_library results include moreResultsExist. When it is true, do not imply you have heard the "
+    "full set; say there are more and offer to narrow by author, series or era.\n"
+    "12. Speech recognition may mishear names, for example Cornwall for Cornwell. If a name looks garbled, "
+    "try the most likely intended author or title.\n"
+    // == Bookshelf and request list ==
+    "13. Adding to the bookshelf or the request list needs no confirmation: just do it, then say it is done "
+    "in one short sentence. Removing from the bookshelf (a book or a periodical issue) is destructive: first "
+    "say which title you would remove and ask whether to go ahead, and only call the remove tool after the "
+    "member clearly says yes in their next message.\n"
+    "14. When adding to the bookshelf, use a format from that title's formats list, preferring "
+    "DAISY_Audio_Human, otherwise another audio format. If the bookshelf is full (no free slots), suggest "
+    "putting the title On Hold, or alternatively adding it to the library's request list (which queues it "
+    "with the library).\n"
+    // == Subscriptions and periodical issues ==
+    "15. Subscriptions are newspapers, magazines and podcasts whose new issues arrive on the bookshelf by "
+    "themselves. To find one, search_library with type Newspaper, Magazine or Podcast, then "
+    "subscribe_to_periodical straight away with that result's seriesId and format (prefer an audio format; if "
+    "several results share a title, choose the audio one or ask). Unsubscribing is destructive: say which one "
+    "you would cancel, wait for a yes, then call unsubscribe_from_periodical with the seriesId from "
+    "get_subscriptions. Keep no other records of subscriptions: get_subscriptions is the list.\n"
+    "16. Keep two things apart in what you say. A SUBSCRIPTION is a standing order: each new issue arrives on "
+    "the bookshelf automatically (get_subscriptions). An ISSUE on the bookshelf is one copy of a newspaper or "
+    "magazine that was added by hand (periodicalIssues in get_bookshelf); it is not a subscription and "
+    "nothing replaces it when it is removed. Say 'subscribed to' only for subscriptions and 'an issue of' for "
+    "shelf items. If asked which periodicals the member has, cover both in one answer, for example 'you are "
+    "not subscribed to anything, but you have two issues on your bookshelf: X and Y'. When an issue on the "
+    "shelf has no subscription behind it, offer once to subscribe them to it. When asked what is on the "
+    "bookshelf, read the books first, then mention any issues. Removing an issue needs the same confirmation "
+    "as removing a book.\n"
+    // == Memory: preferences, authors and books ==
+    "17. Use remember_preference whenever the member states a preference outside a normal search (favourite "
+    "genres or authors, formats, things to avoid), and recall_preferences when it would help answer. What you "
+    "already remember is listed below the rules.\n"
+    "18. The member's authors list holds authors they know, and some of them are favourites. An author gets "
+    "on the list when the member asks you to add them (add_preferred_author), and automatically when a book "
+    "by them is added to the bookshelf, so never ask whether to add an author after adding a book. An author "
+    "is a favourite only when the member says so: call add_preferred_author with isFavorite true (it also "
+    "updates an author already on the list). After a successful add_to_bookshelf, use your own knowledge to "
+    "name the title's likely genre; if it is not in currentPreferredGenres, ask whether to add it, and call "
+    "add_preferred_genre only if they agree.\n"
+    "19. The member's books list holds books they know, and some are favourites. A book gets on the list when "
+    "the member asks you to add it (add_book), and automatically when it is added to the bookshelf. A book is "
+    "a favourite only when the member says they like or love it: call add_book with isFavorite true. It works "
+    "for any book, even one that was never on the bookshelf, and also updates a book already on the list. Use "
+    "isFavorite false to take a book off the favourites but keep it on the list. The favourites are listed "
+    "below as favoriteBooks.\n"
+    "20. Removing an author from the member's preferred authors is destructive, so verify first: say which "
+    "author you would remove and ask whether to go ahead, and only call remove_preferred_author after the "
+    "member clearly says yes in their next message.\n"
+    "21. Removing a book from the books list is destructive, so verify first: say which book you would remove "
+    "and ask whether to go ahead, and only call remove_book after the member clearly says yes in their next "
+    "message. If they only want it off the favourites, that needs no check: use add_book with isFavorite "
+    "false.\n"
+    "22. Use search_reading_history to check whether a title was read or borrowed before (it covers every "
+    "book ever added, not just what is on the shelf), and rate_book whenever the member wants to rate a "
+    "book.\n"
+    "23. Ground 'what should I read next' and 'something like X' requests in the member's taste: call "
+    "get_reading_profile for their frequent and favourite authors and favourite books. Never suggest, as "
+    "something new, a book that is on their bookshelf or on their books list, since they already have it or "
+    "know it; check your candidate titles against the profile and pick others. If they ask for a book they "
+    "already know, that is fine.\n"
+    "24. When the member asks what they have been reading lately or what kind of books they like, answer "
+    "conversationally from the profile (favourite authors, a couple of favourites) rather than listing "
+    "titles.\n"
+    // == The On Hold list ==
+    "25. There is an On Hold list: the member's own put-it-aside list, kept by you, separate from the "
+    "library's request list. Books that will not fit on the bookshelf go On Hold. When the member has found a "
+    "book or series they want but has not said what to do with it, offer the choice in one short question: "
+    "put it on the bookshelf now, or put it On Hold. 'Add it' means the bookshelf; 'hold it', 'put it on "
+    "hold', 'save it' or 'for later' means add_to_on_hold, which needs no confirmation. Always call it the On "
+    "Hold list when you speak, and never say 'standby'. Every book is its own entry: when asked to put "
+    "several books, or all the books in a series, On Hold, add each book separately (all in one "
+    "add_to_on_hold call, using the books list, in reading order from your own knowledge), never as one entry "
+    "with the titles in a note. A series is one entry only if the member explicitly asks for the series as "
+    "one item.\n"
+    "26. There are two ways to take a book off hold, and the member chooses: move it to the bookshelf (use "
+    "add_to_bookshelf, finding its id and a format with search_library if the entry has no id; that takes it "
+    "off hold by itself; if the entry is a series or is titled differently pass holdEntry, and pass "
+    "keepOnHold only if the member wants it kept on hold too), or just delete it (remove_from_on_hold). "
+    "Taking a book off hold does NOT mean deleting it: if the member only says something like 'take it off "
+    "hold', 'release it' or 'un-hold it', do nothing yet and ask in one short question whether to put it on "
+    "the bookshelf or just delete it. 'What books do I have on hold' is answered with get_on_hold_list.\n"
+    "27. Deleting something from the On Hold list needs no confirmation: do it with remove_from_on_hold and "
+    "say which book you removed. If several entries match, ask which one.\n"
+    "28. Putting books On Hold does not need a catalogue search: do it straight away from your own knowledge, "
+    "in a single add_to_on_hold call. Only search the catalogue when you are about to put a book on the "
+    "bookshelf and need its id and format.\n"
+    // == Practice mode ==
+    "29. If a tool result says dryRun, the change was only pretended (practice mode). Tell the member it was "
+    "a practice run and that nothing on their real library account changed.\n";
 
 const char kToolsJson[] = R"JSON([
  {"name":"search_library",
@@ -134,7 +163,7 @@ const char kToolsJson[] = R"JSON([
     "type":{"type":"string","enum":["Book","Picture Book","Magazine","Newspaper","Podcast","Music"],"description":"Item type to search. Defaults to Book."}},
    "required":["keyword"]}},
  {"name":"get_bookshelf",
-  "description":"Get the current bookshelf: everything on loan, including how many of the 20 book/music loan slots are used.",
+  "description":"Get the current bookshelf: the books on loan (including how many of the 20 loan slots are used) and, separately, any single newspaper or magazine issues on the shelf (periodicalIssues). Issues on the shelf are not subscriptions: use get_subscriptions for those.",
   "input_schema":{"type":"object","properties":{}}},
  {"name":"add_to_bookshelf",
   "description":"Add a title to the bookshelf (borrows it; uses one of the 20 loan slots). Do this straight away when asked, no confirmation needed. Use the bookshareId and a formatId from that title's search result.",
@@ -148,7 +177,7 @@ const char kToolsJson[] = R"JSON([
     "type":{"type":"string","enum":["book","music","periodical"],"description":"Defaults to book."}},
    "required":["bookshareId","format","title"]}},
  {"name":"remove_from_bookshelf",
-  "description":"Remove a title from the bookshelf, freeing a loan slot. Destructive: always say which title you would remove and get an explicit yes from the member in a prior message before calling this.",
+  "description":"Remove a book, or a single periodical issue, from the bookshelf. Destructive: always say which title you would remove and get an explicit yes from the member in a prior message before calling this. For a periodical issue use type periodical and the activeTitleId from periodicalIssues in get_bookshelf; this does not cancel any subscription.",
   "input_schema":{"type":"object","properties":{
     "activeTitleId":{"type":"string","description":"The activeTitleId from get_bookshelf (not the bookshareId)."},
     "type":{"type":"string","enum":["book","music","periodical"],"description":"Defaults to book."}},
@@ -158,6 +187,21 @@ const char kToolsJson[] = R"JSON([
   "input_schema":{"type":"object","properties":{
     "bookshareId":{"type":"string","description":"The catalogue id from a search result."}},
    "required":["bookshareId"]}},
+ {"name":"get_subscriptions",
+  "description":"Get the periodicals (newspapers, magazines, podcasts) the member is subscribed to. New issues arrive on the bookshelf by themselves.",
+  "input_schema":{"type":"object","properties":{}}},
+ {"name":"subscribe_to_periodical",
+  "description":"Subscribe the member to a newspaper, magazine or podcast. Do this straight away when asked, no confirmation needed. Find it first with search_library (type Newspaper, Magazine or Podcast) and use that result's seriesId and one of its formats. If the same title appears more than once with different formats, pick the one that suits the member (they usually prefer audio) or ask.",
+  "input_schema":{"type":"object","properties":{
+    "seriesId":{"type":"string","description":"The seriesId from a periodical search result."},
+    "format":{"type":"string","description":"A formatId from that search result's formats list."},
+    "title":{"type":"string","description":"The periodical's title, from the search result."}},
+   "required":["seriesId","format","title"]}},
+ {"name":"unsubscribe_from_periodical",
+  "description":"Cancel a subscription. Destructive: always say which periodical you would unsubscribe from and get an explicit yes from the member in a prior message before calling this. Use the seriesId from get_subscriptions.",
+  "input_schema":{"type":"object","properties":{
+    "seriesId":{"type":"string","description":"The seriesId from get_subscriptions."}},
+   "required":["seriesId"]}},
  {"name":"remember_preference",
   "description":"Save a short note about something the member likes, dislikes or is looking for, so it is remembered in future sessions.",
   "input_schema":{"type":"object","properties":{
@@ -350,6 +394,23 @@ std::string tool_search(const Config& c, cJSON* input, bool* is_error) {
         *is_error = true;
         return "The library search failed.";
     }
+    const std::string kind = cJSON_IsString(type) ? type->valuestring : "Book";
+    if (kind == "Magazine" || kind == "Newspaper" || kind == "Podcast") {
+        // Periodicals have no authors. The same title can appear once per format, each with its own seriesId.
+        cJSON* o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "total", r.total);
+        cJSON_AddNumberToObject(o, "shown", static_cast<double>(r.items.size()));
+        cJSON* arr = cJSON_AddArrayToObject(o, "periodicals");
+        for (const auto& h : r.items) {
+            cJSON* t = cJSON_CreateObject();
+            cJSON_AddStringToObject(t, "title", h.title.c_str());
+            cJSON_AddStringToObject(t, "seriesId", h.bookshare_id.c_str());
+            cJSON* fm = cJSON_AddArrayToObject(t, "formats");
+            for (const auto& f : h.formats) cJSON_AddItemToArray(fm, cJSON_CreateString(f.c_str()));
+            cJSON_AddItemToArray(arr, t);
+        }
+        return print(o);
+    }
     // Pre-cluster by author so the model summarises instead of reading a flat list (Bookworm's ResultSummarizer).
     std::vector<std::pair<std::string, std::vector<const va::BookHit*>>> groups;
     for (const auto& h : r.items) {
@@ -412,6 +473,16 @@ std::string tool_bookshelf(const Config& c, bool* is_error) {
     cJSON_AddNumberToObject(o, "periodicalsOnShelf", shelf.periodical_count);
     cJSON* books = cJSON_AddArrayToObject(o, "books");
     for (const auto& b : shelf.books) add_item(books, b);
+    // Single newspaper/magazine issues on the shelf. These are NOT subscriptions.
+    cJSON* issues = cJSON_AddArrayToObject(o, "periodicalIssues");
+    for (const auto& p : shelf.periodicals) {
+        cJSON* t = cJSON_CreateObject();
+        cJSON_AddStringToObject(t, "title", p.title.c_str());
+        cJSON_AddStringToObject(t, "issueDate", p.issue_date.c_str());
+        cJSON_AddStringToObject(t, "format", p.format.c_str());
+        cJSON_AddStringToObject(t, "activeTitleId", p.active_title_id.c_str());
+        cJSON_AddItemToArray(issues, t);
+    }
     return print(o);
 }
 
@@ -541,9 +612,9 @@ std::string tool_remove_bookshelf(const Config& c, cJSON* input, bool* is_error)
     std::string active = arg(input, "activeTitleId");
     std::string type = arg(input, "type");
     if (type.empty()) type = "book";
-    if (type != "book") {
+    if (type != "book" && type != "periodical") {
         *is_error = true;
-        return "Only books can be removed for now, not music or periodical issues.";
+        return "Only books and periodical issues can be removed for now, not music.";
     }
     if (active.empty()) {
         *is_error = true;
@@ -561,10 +632,12 @@ std::string tool_remove_bookshelf(const Config& c, cJSON* input, bool* is_error)
     // Only remove something that is really on the shelf right now.
     std::string title, bookshare_id;
     bool found = false;
-    for (const auto& b : before.books) {
+    const std::vector<va::ShelfItem>& pool = type == "periodical" ? before.periodicals : before.books;
+    for (const auto& b : pool) {
         if (b.active_title_id == active) {
             found = true;
             title = b.title;
+            if (type == "periodical" && !b.issue_date.empty()) title += ", issue of " + b.issue_date;
             bookshare_id = b.bookshare_id;
         }
     }
@@ -575,14 +648,15 @@ std::string tool_remove_bookshelf(const Config& c, cJSON* input, bool* is_error)
     if (c.dry_run) return dry_run_result("remove_from_bookshelf", title);
 
     std::string reply;
-    if (va::remove_from_bookshelf(active, type, &reply) != ESP_OK) {
+    const bool issue = type == "periodical";
+    if ((issue ? va::remove_periodical_issue(active, &reply) : va::remove_from_bookshelf(active, type, &reply)) != ESP_OK) {
         *is_error = true;
         return "The library did not accept that request.";
     }
     va::Shelf after;
     bool still_there = false;
     if (va::bookshelf(after) == ESP_OK) {
-        for (const auto& b : after.books) if (b.active_title_id == active) still_there = true;
+        for (const auto& b : issue ? after.periodicals : after.books) if (b.active_title_id == active) still_there = true;
     }
     if (still_there) {
         ESP_LOGW(TAG, "remove: title still on shelf afterwards (portal said: %s)", reply.c_str());
@@ -593,7 +667,7 @@ std::string tool_remove_bookshelf(const Config& c, cJSON* input, bool* is_error)
     cJSON_AddBoolToObject(o, "success", true);
     cJSON_AddStringToObject(o, "title", title.c_str());
     cJSON_AddNumberToObject(o, "freeSlotsNow", va::kLoanCap - after.loan_count);
-    if (memory::configured(c)) memory::log_removed(c, bookshare_id);
+    if (!issue && memory::configured(c)) memory::log_removed(c, bookshare_id);
     return print(o);
 }
 
@@ -616,6 +690,112 @@ std::string tool_add_request_list(const Config& c, cJSON* input, bool* is_error)
     cJSON* o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "success", true);
     cJSON_AddStringToObject(o, "bookshareId", id.c_str());
+    return print(o);
+}
+
+std::string tool_get_subscriptions(const Config& c, bool* is_error) {
+    if (ensure_login(c) != ESP_OK) {
+        *is_error = true;
+        return "Could not sign in to the library.";
+    }
+    std::vector<va::Subscription> subs;
+    if (va::subscriptions(subs) != ESP_OK) {
+        *is_error = true;
+        return "Could not read the subscriptions.";
+    }
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "total", static_cast<double>(subs.size()));
+    cJSON* arr = cJSON_AddArrayToObject(o, "subscriptions");
+    for (const auto& s : subs) {
+        cJSON* t = cJSON_CreateObject();
+        cJSON_AddStringToObject(t, "title", s.title.c_str());
+        cJSON_AddStringToObject(t, "seriesId", s.series_id.c_str());
+        cJSON_AddStringToObject(t, "format", s.format.c_str());
+        cJSON_AddStringToObject(t, "kind", s.kind.c_str());
+        cJSON_AddItemToArray(arr, t);
+    }
+    return print(o);
+}
+
+bool has_subscription(const std::vector<va::Subscription>& subs, const std::string& id) {
+    for (const auto& s : subs) if (s.series_id == id) return true;
+    return false;
+}
+
+std::string tool_subscribe(const Config& c, cJSON* input, bool* is_error) {
+    std::string id = arg(input, "seriesId"), format = arg(input, "format"), title = arg(input, "title");
+    if (id.empty() || format.empty()) {
+        *is_error = true;
+        return "Missing required argument: seriesId and format are both needed.";
+    }
+    if (ensure_login(c) != ESP_OK) {
+        *is_error = true;
+        return "Could not sign in to the library.";
+    }
+    std::vector<va::Subscription> before;
+    if (va::subscriptions(before) != ESP_OK) {
+        *is_error = true;
+        return "Could not read the subscriptions.";
+    }
+    if (has_subscription(before, id)) {
+        *is_error = true;
+        return "The member is already subscribed to that periodical.";
+    }
+    if (c.dry_run) return dry_run_result("subscribe_to_periodical", title);
+    std::string reply;
+    if (va::subscribe(id, format, title, &reply) != ESP_OK) {
+        *is_error = true;
+        return "The library did not accept that request.";
+    }
+    std::vector<va::Subscription> after;  // confirm by re-reading rather than trusting the response
+    if (va::subscriptions(after) != ESP_OK || !has_subscription(after, id)) {
+        ESP_LOGW(TAG, "subscribe: not in the list afterwards (portal said: %s)", reply.c_str());
+        *is_error = true;
+        return "The library accepted the request but the subscription did not appear. Tell the member it may not have worked.";
+    }
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "success", true);
+    cJSON_AddStringToObject(o, "title", title.c_str());
+    cJSON_AddStringToObject(o, "note", "New issues will arrive on the bookshelf by themselves.");
+    return print(o);
+}
+
+std::string tool_unsubscribe(const Config& c, cJSON* input, bool* is_error) {
+    std::string id = arg(input, "seriesId");
+    if (id.empty()) {
+        *is_error = true;
+        return "Missing required argument: seriesId";
+    }
+    if (ensure_login(c) != ESP_OK) {
+        *is_error = true;
+        return "Could not sign in to the library.";
+    }
+    std::vector<va::Subscription> before;
+    if (va::subscriptions(before) != ESP_OK) {
+        *is_error = true;
+        return "Could not read the subscriptions.";
+    }
+    std::string title;
+    for (const auto& s : before) if (s.series_id == id) title = s.title;
+    if (title.empty()) {
+        *is_error = true;
+        return "That seriesId is not in the subscriptions. Call get_subscriptions and use an id from it.";
+    }
+    if (c.dry_run) return dry_run_result("unsubscribe_from_periodical", title);
+    std::string reply;
+    if (va::unsubscribe(id, &reply) != ESP_OK) {
+        *is_error = true;
+        return "The library did not accept that request.";
+    }
+    std::vector<va::Subscription> after;
+    if (va::subscriptions(after) != ESP_OK || has_subscription(after, id)) {
+        ESP_LOGW(TAG, "unsubscribe: still in the list afterwards (portal said: %s)", reply.c_str());
+        *is_error = true;
+        return "The library accepted the request but the subscription is still there. Tell the member it did not work.";
+    }
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "success", true);
+    cJSON_AddStringToObject(o, "title", title.c_str());
     return print(o);
 }
 
@@ -849,6 +1029,9 @@ std::string run_tool(const Config& c, const std::string& name, cJSON* input, boo
     if (name == "search_library") return tool_search(c, input, is_error);
     if (name == "get_bookshelf") return tool_bookshelf(c, is_error);
     if (name == "get_request_list") return tool_request_list(c, is_error);
+    if (name == "get_subscriptions") return tool_get_subscriptions(c, is_error);
+    if (name == "subscribe_to_periodical") return tool_subscribe(c, input, is_error);
+    if (name == "unsubscribe_from_periodical") return tool_unsubscribe(c, input, is_error);
     *is_error = true;
     return "Unknown tool: " + name;
 }

@@ -10,6 +10,12 @@ from live tests against a real account in September 2026. Unofficial and may cha
 |---|---|---|
 | Add to bookshelf | `GET /library/my-bookshelf/add/{bookshareId}/{formatId}?type=book` | Works. Confirmed by re-reading the shelf. |
 | Remove a book from the bookshelf | `POST /library/my-bookshelf/remove/all`, form-encoded `book_active_title_ids={activeTitleId}` | Works. Send one id per request, exactly as the page's "Remove Selected" button does. Sent with `X-Requested-With: XMLHttpRequest`. |
+| Remove ONE periodical issue from the bookshelf | `POST /library/my-periodical/remove/all`, form-encoded `periodical_active_title_ids={issueId}` | Works. `issueId` is `periodical.seriesId` in the bookshelf JSON (the issue's own id, e.g. `3992128401`), NOT the item's `activeTitleId` (that is the series id and gives a 404 on the per-item GET). Returns `{"message":"OK"}`. Removing an issue does not cancel a subscription. |
+| Subscribe to a periodical | `POST /library/my-library/subscription/add/?seriesId={id}&format={formatId}&editionId={id}&seriesTitle={title}` | Works. Empty body, `X-Requested-With: XMLHttpRequest`. Returns `{content: <modal html>, modalConfirm: false}`. Confirm by re-reading the subscription list. |
+| Unsubscribe | `DELETE /library/my-library/subscription/remove/{seriesId}?limit=20&currentPage=1` | Works. Returns the refreshed list JSON. `seriesId` is the `series.seriesId` of the list item (it equals `activeTitleId`). |
+| List subscriptions | `GET /library/my-library/subscription?limit=20&currentPage=1` | `subscriptions` is `""` when empty. Items: `title`, `formatName`, `titleContentType`, `series.seriesId`. |
+
+Periodicals are found with `POST /library/quick-search` and `type` Newspaper, Magazine or Podcast; results are in `periodicalTab.listArticle[]`, each with a `seriesId` and exactly one format (the same title can appear once per format).
 
 ## Correction to Bookworm's notes
 
@@ -29,8 +35,6 @@ it re-reads the shelf and checks the title is gone.
 | Action | Request |
 |---|---|
 | Remove from request list | `/library/request-list/remove/{activeTitleId}` (method not confirmed) |
-| Remove a subscription | `/library/my-library/subscription/remove/{activeTitleId}` (method not confirmed) |
-| Remove periodical issues in bulk | `POST /library/my-periodical/remove/all` (field name not confirmed) |
 | Download a bookshelf item | `/library/download` (called from `button.item-download`; not traced further) |
 
 ## Other notes

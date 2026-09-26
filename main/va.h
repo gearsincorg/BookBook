@@ -32,12 +32,25 @@ struct ShelfItem {
     std::string format;
     std::string status;
     std::string date_added;
+    std::string issue_date;  // periodical issues only: the publication date, e.g. "17 September 2026"
 };
 
 struct Shelf {
     int loan_count = 0;  // books + music + braille, out of kLoanCap
     int periodical_count = 0;
     std::vector<ShelfItem> books;
+    // Single issues of newspapers and magazines, borrowed one at a time (they are not loan slots). For these,
+    // active_title_id holds the id that remove_periodical_issue() needs (the issue's own id).
+    std::vector<ShelfItem> periodicals;
+};
+
+// A periodical (magazine, newspaper, podcast) the member is subscribed to. New issues arrive on the
+// bookshelf by themselves.
+struct Subscription {
+    std::string series_id;  // the periodical's id: use for unsubscribe (same as bookshareId in a search)
+    std::string title;
+    std::string format;  // display name, e.g. "DAISY Text"
+    std::string kind;    // Newspaper, Magazine, Podcast
 };
 
 // Catalogue names look like "Silva, Daniel, 1960-" or "By Smith, Martin Cruz, 1942-". This returns the
@@ -64,7 +77,19 @@ esp_err_t add_to_bookshelf(const std::string& bookshare_id, const std::string& f
                            std::string* reply = nullptr);
 esp_err_t remove_from_bookshelf(const std::string& active_title_id, const std::string& type,
                                 std::string* reply = nullptr);
+// Removes ONE periodical issue from the bookshelf: POST /library/my-periodical/remove/all with
+// periodical_active_title_ids=<the issue's id>, as the site's Remove Selected button does (verified live, 2026-09).
+esp_err_t remove_periodical_issue(const std::string& issue_id, std::string* reply = nullptr);
 esp_err_t add_to_request_list(const std::string& bookshare_id, std::string* reply = nullptr);
 esp_err_t request_list(std::vector<ShelfItem>& out, int* total = nullptr);
+
+// Subscriptions (verified live, 2026-09): list, subscribe (POST .../subscription/add/?seriesId=..&format=..)
+// and unsubscribe (DELETE .../subscription/remove/{seriesId}). Search for periodicals with
+// search(keyword, out, n, "Magazine" | "Newspaper" | "Podcast"): each hit's bookshare_id is the series id and
+// its formats hold the one formatId that hit is available in.
+esp_err_t subscriptions(std::vector<Subscription>& out);
+esp_err_t subscribe(const std::string& series_id, const std::string& format, const std::string& title,
+                    std::string* reply = nullptr);
+esp_err_t unsubscribe(const std::string& series_id, std::string* reply = nullptr);
 
 }  // namespace va
