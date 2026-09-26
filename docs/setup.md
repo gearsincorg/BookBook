@@ -20,7 +20,7 @@ Note: this page is plain HTTP on your home network, so anyone on that network wh
 
 ## The button
 
-- **Hold**: push-to-talk. Speak while holding (up to 15 s), release, and it answers. Press again while it is answering to stop it.
+- **Touch and hold the pad** (XIAO stand-in: the touch pad on D5; the Waveshare board uses Key1): push-to-talk. Speak while holding (up to 15 s), release, and it answers. Press again while it is answering to stop it.
 - A very quick tap (under 0.4 s) is ignored.
 
 There is currently no button gesture for setup mode (it was removed to free the button for talking). Use the setup page over your normal Wi-Fi. The BookBook-XXXX setup network still starts by itself when no Wi-Fi is saved or the saved one cannot be joined.

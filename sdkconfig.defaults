@@ -12,3 +12,7 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=8192
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# touch.cpp uses the legacy touch driver (driver/touch_pad.h), as PhilbotSays does; silence its
+# deprecation #warning since we are using it deliberately.
+CONFIG_TOUCH_SUPPRESS_DEPRECATE_WARN=y

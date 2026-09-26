@@ -50,6 +50,21 @@ menu "BookBook"
         range 1 32
         default 4
 
+    config BOOKBOOK_TOUCH_PIN
+        int "Capacitive touch pad GPIO, used as the button (XIAO stand-in)"
+        default 6
+        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
+        help
+            Same pad as PhilbotSays: GPIO6 (XIAO D5). Must be a touch-capable pin (GPIO1-14 on the
+            ESP32-S3; the number equals the touch channel).
+    config BOOKBOOK_TOUCH_ALSO_BOOT_BUTTON
+        bool "Also treat the BOOT button (GPIO0) as the button (bench fallback)"
+        default n
+        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
+        help
+            ORs the BOOT button in with the touch pad, like PhilbotSays' dev button. Off by default:
+            the touch pad is the button. Never hold BOOT while powering up or resetting.
+
     config BOOKBOOK_CLAUDE_MODEL
         string "Claude model id"
         default "claude-sonnet-5"

@@ -102,8 +102,8 @@ extern "C" void app_main() {
     vTaskDelay(pdMS_TO_TICKS(400));
     board::set_leds(20, 10, 0);
 
-    // Note: Key1 cannot be used at boot on the XIAO stand-in (BOOT is GPIO0, a strapping pin:
-    // holding it at reset enters the ROM downloader). Setup is reached over the normal Wi-Fi
+    // Keep hands off the touch pad while powering up: it calibrates against the untouched pad (a high
+    // calibration recovers by itself, see touch.cpp). Setup is reached over the normal Wi-Fi
     // (http://bookbook.local/); the setup network starts by itself when Wi-Fi is missing or fails.
     bool have_wifi = !cfg.wifi_ssid.empty();
 

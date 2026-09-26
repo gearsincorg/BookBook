@@ -6,6 +6,7 @@
 #include "esp_io_expander_tca95xx_16bit.h"
 #include "led_strip.h"
 #include "sdkconfig.h"
+#include "touch.h"
 
 static const char* TAG = "board";
 
@@ -13,8 +14,9 @@ namespace board {
 
 #if CONFIG_BOOKBOOK_BOARD_XIAO_ESP32S3
 
-// Temporary stand-in: an external WS2812-style LED string on GPIO2 and the BOOT
-// button (GPIO0, active low) as Key1. No amp, no expander.
+// Temporary stand-in on the PhilbotSays PCB: an external WS2812-style LED string on GPIO2, and Key1 is
+// the capacitive touch pad on GPIO6 (see touch.cpp). The BOOT button (GPIO0, active low) can be OR'd in
+// as a bench fallback (CONFIG_BOOKBOOK_TOUCH_ALSO_BOOT_BUTTON). No amp, no expander.
 constexpr int kXiaoLedGpio = 2;
 constexpr int kXiaoLedCount = CONFIG_BOOKBOOK_XIAO_LED_COUNT;
 constexpr gpio_num_t kXiaoButton = GPIO_NUM_0;
@@ -31,12 +33,22 @@ esp_err_t init() {
     ESP_RETURN_ON_ERROR(led_strip_new_rmt_device(&strip_cfg, &rmt_cfg, &s_leds), TAG, "leds");
     led_strip_clear(s_leds);
 
+#ifdef CONFIG_BOOKBOOK_TOUCH_ALSO_BOOT_BUTTON
     gpio_config_t btn = {};
     btn.pin_bit_mask = 1ULL << kXiaoButton;
     btn.mode = GPIO_MODE_INPUT;
     btn.pull_up_en = GPIO_PULLUP_ENABLE;
     ESP_RETURN_ON_ERROR(gpio_config(&btn), TAG, "button");
-    ESP_LOGI(TAG, "XIAO ESP32-S3 dev board: %d LEDs on GPIO%d, Key1=BOOT(GPIO0)", kXiaoLedCount, kXiaoLedGpio);
+#endif
+    ESP_RETURN_ON_ERROR(touch::start(), TAG, "touch");  // calibrates on the untouched pad: keep hands off at power-up
+    ESP_LOGI(TAG, "XIAO ESP32-S3 dev board: %d LEDs on GPIO%d, Key1 = touch pad GPIO%d%s", kXiaoLedCount, kXiaoLedGpio,
+             CONFIG_BOOKBOOK_TOUCH_PIN,
+#ifdef CONFIG_BOOKBOOK_TOUCH_ALSO_BOOT_BUTTON
+             " or BOOT(GPIO0)"
+#else
+             ""
+#endif
+    );
     return ESP_OK;
 }
 
@@ -49,7 +61,11 @@ void set_leds(uint8_t r, uint8_t g, uint8_t b) {
 void set_amp(bool) {}
 
 bool key_pressed(Key key) {
-    return key == Key::Key1 && gpio_get_level(kXiaoButton) == 0;
+    if (key != Key::Key1) return false;
+#ifdef CONFIG_BOOKBOOK_TOUCH_ALSO_BOOT_BUTTON
+    if (gpio_get_level(kXiaoButton) == 0) return true;  // active-low: switched to GND
+#endif
+    return touch::present();
 }
 
 #else  // Waveshare ESP32-S3-AUDIO-Board
