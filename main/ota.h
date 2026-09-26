@@ -20,6 +20,11 @@ struct Info {
     std::string new_sha256;
 };
 
+// The version and build time of the running image (for example "v1.3.0", "Sep 26 2026 16:33:30"). A build from
+// a released tag reports just the tag; any other build adds "-<commits since>-g<hash>" and "-dirty" if uncommitted.
+std::string running_version();
+std::string running_built();
+
 // Reads the manifest. ESP_ERR_INVALID_STATE when no storage container is configured or Wi-Fi is down.
 esp_err_t check(const Config& cfg, Info& out);
 

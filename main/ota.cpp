@@ -91,6 +91,9 @@ std::string running_sha256() {
 
 namespace ota {
 
+std::string running_version() { return esp_app_get_description()->version; }
+std::string running_built() { return built(*esp_app_get_description()); }
+
 esp_err_t check(const Config& cfg, Info& out) {
     out = Info();
     if (cfg.memory_url.empty() || !wifi::connected()) return ESP_ERR_INVALID_STATE;

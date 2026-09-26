@@ -162,7 +162,10 @@ const char kSystemPrompt[] =
     "have finished speaking, takes less than a minute and restarts you, so say that in one short sentence, for "
     "example 'Updating now. I will be back in less than a minute.' If install_update says there is nothing to "
     "install, say you are already up to date. Do not read out version strings or build times; a date is "
-    "enough if they ask which version is newer.\n";
+    "enough if they ask which version is newer.\n"
+    "31. If the member asks which version of the software you are running, call get_version and say it "
+    "plainly, for example 'I am running version 1.3.0.' If developmentBuild is true, say it is a test build "
+    "based on that version. Give the build date only if they ask for it.\n";
 
 const char kToolsJson[] = R"JSON([
  {"name":"search_library",
@@ -294,6 +297,9 @@ const char kToolsJson[] = R"JSON([
   "input_schema":{"type":"object","properties":{}}},
  {"name":"check_for_update",
   "description":"Check whether a newer version of your own software has been published. Only when the member asks about updates. Changes nothing.",
+  "input_schema":{"type":"object","properties":{}}},
+ {"name":"get_version",
+  "description":"Get the version of your own software that is running now. Only when the member asks which version you are running. Changes nothing.",
   "input_schema":{"type":"object","properties":{}}},
  {"name":"install_update",
   "description":"Install the published update to your own software. Only when the member has asked you to update. It starts after you have finished speaking, takes less than a minute, and restarts you.",
@@ -747,6 +753,17 @@ std::string tool_check_update(const Config& c, bool* is_error) {
     return print(o);
 }
 
+std::string tool_get_version() {
+    std::string v = ota::running_version();
+    cJSON* o = cJSON_CreateObject();
+    // A released build reports just its tag, "v1.3.0"; anything else has "-<n>-g<hash>" and/or "-dirty" after it.
+    const size_t dash = v.find('-');
+    cJSON_AddStringToObject(o, "version", (v.size() && v[0] == 'v' ? v.substr(1, dash == std::string::npos ? dash : dash - 1) : v).c_str());
+    cJSON_AddBoolToObject(o, "developmentBuild", dash != std::string::npos);
+    cJSON_AddStringToObject(o, "built", ota::running_built().c_str());
+    return print(o);
+}
+
 std::string tool_install_update(const Config& c, bool* is_error) {
     ota::Info info;
     esp_err_t err = ota::check(c, info);
@@ -1075,6 +1092,7 @@ std::string run_tool(const Config& c, const std::string& name, cJSON* input, boo
     if (name == "get_subscriptions") return tool_get_subscriptions(c, is_error);
     if (name == "check_for_update") return tool_check_update(c, is_error);
     if (name == "install_update") return tool_install_update(c, is_error);
+    if (name == "get_version") return tool_get_version();
     if (name == "subscribe_to_periodical") return tool_subscribe(c, input, is_error);
     if (name == "unsubscribe_from_periodical") return tool_unsubscribe(c, input, is_error);
     *is_error = true;
