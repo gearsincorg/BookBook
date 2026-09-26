@@ -160,8 +160,8 @@ const char kSystemPrompt[] =
     "30. You can update your own software when the member asks. Never update on your own initiative and never "
     "mention updates unprompted. If they ask whether an update is available, call check_for_update and answer "
     "in a sentence. If they ask you to update, or to install it, call install_update: it starts as soon as you "
-    "have finished speaking, takes less than a minute and restarts you, so say that in one short sentence, for "
-    "example 'Updating now. I will be back in less than a minute.' If install_update says there is nothing to "
+    "have finished speaking, takes less than a minute and restarts you. The device speaks its own fixed announcement "
+    "of the update, so whatever you say in that reply is not spoken: keep it to a few words. If install_update says there is nothing to "
     "install, say you are already up to date. Do not read out version strings or build times; a date is "
     "enough if they ask which version is newer.\n"
     "31. If the member asks which version of the software you are running, call get_version and say it "
@@ -175,7 +175,10 @@ const char kSystemPrompt[] =
     "until ten minutes after they last use the setup page. Tell them to join that network on their phone or "
     "computer, open a web browser and go to the address in spokenAddress. If automatic is true it was already "
     "open because "
-    "your Wi-Fi is down. Never say a password.\n";
+    "your Wi-Fi is down. Never say a password.\n"
+    "33. If the member asks you to turn off, close or stop the setup network, setup mode or the access point, "
+    "call stop_setup_network without asking first, and say in one short sentence that it is off. If it was "
+    "not open, say so.\n";
 
 const char kToolsJson[] = R"JSON([
  {"name":"search_library",
@@ -313,6 +316,9 @@ const char kToolsJson[] = R"JSON([
   "input_schema":{"type":"object","properties":{}}},
  {"name":"start_setup_network",
   "description":"Open the setup Wi-Fi network (a wireless access point) so the member or a helper can change settings on the setup page. Only after you asked whether they would like one and they said yes. It closes by itself ten minutes after the setup page was last used.",
+  "input_schema":{"type":"object","properties":{}}},
+ {"name":"stop_setup_network",
+  "description":"Turn the setup Wi-Fi network (the wireless access point for setup) off now. Only when the member asks you to turn off, close or stop setup mode.",
   "input_schema":{"type":"object","properties":{}}},
  {"name":"install_update",
   "description":"Install the published update to your own software. Only when the member has asked you to update. It starts after you have finished speaking, takes less than a minute, and restarts you.",
@@ -791,6 +797,14 @@ std::string tool_start_setup_network(bool* is_error) {
     return print(o);
 }
 
+std::string tool_stop_setup_network() {
+    switch (setupnet::close_now()) {
+        case setupnet::CloseResult::Closed: return "{\"result\":\"closed\"}";
+        case setupnet::CloseResult::WasNotOpen: return "{\"result\":\"notOpen\"}";
+    }
+    return "{\"result\":\"closed\"}";
+}
+
 std::string tool_install_update(const Config& c, bool* is_error) {
     ota::Info info;
     esp_err_t err = ota::check(c, info);
@@ -801,7 +815,7 @@ std::string tool_install_update(const Config& c, bool* is_error) {
     }
     if (!info.available) return "Already up to date: there is nothing to install.";
     ota::request_install();
-    return "The update will start as soon as you have finished speaking. Tell the member it takes less than a minute and you will be back after a restart.";
+    return "The update will start as soon as you have finished speaking. The device announces it itself, so reply with just a few words.";
 }
 
 bool has_subscription(const std::vector<va::Subscription>& subs, const std::string& id) {
@@ -1121,6 +1135,7 @@ std::string run_tool(const Config& c, const std::string& name, cJSON* input, boo
     if (name == "install_update") return tool_install_update(c, is_error);
     if (name == "get_version") return tool_get_version();
     if (name == "start_setup_network") return tool_start_setup_network(is_error);
+    if (name == "stop_setup_network") return tool_stop_setup_network();
     if (name == "subscribe_to_periodical") return tool_subscribe(c, input, is_error);
     if (name == "unsubscribe_from_periodical") return tool_unsubscribe(c, input, is_error);
     *is_error = true;

@@ -24,4 +24,9 @@ struct Opened {
 // Opens the setup network (or, if it is already open, keeps it open another kIdleCloseMinutes).
 esp_err_t open_on_request(Opened& out);
 
+enum class CloseResult { Closed, WasNotOpen };
+
+// Turns the setup network off now, whichever way it was opened.
+CloseResult close_now();
+
 }  // namespace setupnet

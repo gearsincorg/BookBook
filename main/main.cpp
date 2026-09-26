@@ -41,6 +41,9 @@ static void show_idle_state() {
 // answer starts by saying so (the notice states the number of seconds).
 constexpr int kMaxTalkMs = 30000;
 static_assert(kMaxTalkMs == 30000, "update kCutOffNotice to match kMaxTalkMs");
+// What is said when an update is about to install, instead of Claude's own reply (so the wording, including the
+// spelling of "buck" chosen to sound more foreign, cannot be reworded). It says how long it takes and that she returns.
+static const char kUpdateAnnouncement[] = "It will take less than a minute. I'll be buck.";
 static const char kCutOffNotice[] = "I'm sorry, but I can only listen up to 30 seconds at a time. ";
 
 // Polled by the speech player so a touch stops a long reading. A pad that is still down when speech starts (for
@@ -188,7 +191,8 @@ static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm, bool cu
         say(c, "Sorry, that took too long, so I stopped. If you were changing your lists, please ask me to check them.");
         return board::key_pressed(board::Key::Key1);
     }
-    say(c, cut_off ? std::string(kCutOffNotice) + turn->spoken : turn->spoken);
+    if (ota::install_requested()) say(c, kUpdateAnnouncement);
+    else say(c, cut_off ? std::string(kCutOffNotice) + turn->spoken : turn->spoken);
     run_pending_update(c);
     return board::key_pressed(board::Key::Key1);
 }

@@ -75,4 +75,13 @@ esp_err_t open_on_request(Opened& out) {
     return ESP_OK;
 }
 
+CloseResult close_now() {
+    if (!wifi::ap_enabled()) return CloseResult::WasNotOpen;
+    s_on_request = false;
+    webconfig::stop_captive_dns();
+    wifi::disable_ap();
+    ESP_LOGI(TAG, "setup network turned off on request");
+    return CloseResult::Closed;
+}
+
 }  // namespace setupnet
