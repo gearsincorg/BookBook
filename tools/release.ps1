@@ -15,7 +15,7 @@ param(
     [Parameter(Mandatory = $true)][string]$NotesFile,
     [switch]$DryRun
 )
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"  # native tools (idf.py, git) write progress to stderr; exit codes are checked explicitly
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
