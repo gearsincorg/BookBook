@@ -7,7 +7,7 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BookBook setup</title>
+<title>Librarian setup</title>
 <style>
   :root { color-scheme: light dark; --bg:#fff; --fg:#1a1a1a; --muted:#555; --line:#bbb; --accent:#0b5cad; --hover:#dcebfa; --ok:#0a6b2b; --bad:#a30000; }
   @media (prefers-color-scheme: dark) { :root { --bg:#141414; --fg:#eee; --muted:#aaa; --line:#444; --accent:#6db3ff; --hover:#243b55; --ok:#5fd38a; --bad:#ff8080; } }
@@ -40,7 +40,7 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
 </head>
 <body>
 <main>
-<h1>BookBook setup</h1>
+<h1>Librarian setup</h1>
 <p class="info" id="info">Loading…</p>
 <div id="status" role="status" aria-live="polite"></div>
 

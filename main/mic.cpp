@@ -173,7 +173,7 @@ void process(std::vector<int16_t>& pcm, Stats* stats) {
              static_cast<unsigned>(pcm.size() * 1000 / kSampleRateHz), process_ms);
 }
 
-esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats) {
+esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats, bool process_audio) {
     out.clear();
     ESP_RETURN_ON_ERROR(start(), TAG, "start");
     const size_t want = static_cast<size_t>(kSampleRateHz) * ms / 1000;
@@ -185,7 +185,7 @@ esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats) {
         return err;
     }
     out.resize(want);
-    process(out, stats);
+    if (process_audio) process(out, stats);
     return ESP_OK;
 }
 
@@ -199,7 +199,7 @@ esp_err_t start() { return ESP_ERR_NOT_SUPPORTED; }
 esp_err_t read(std::vector<int16_t>&, int) { return ESP_ERR_NOT_SUPPORTED; }
 void stop() {}
 void process(std::vector<int16_t>&, Stats*) {}
-esp_err_t record(std::vector<int16_t>&, int, Stats*) { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t record(std::vector<int16_t>&, int, Stats*, bool) { return ESP_ERR_NOT_SUPPORTED; }
 }  // namespace mic
 
 #endif

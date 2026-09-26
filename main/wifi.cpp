@@ -8,6 +8,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "dhcpserver/dhcpserver.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "esp_wifi.h"
@@ -68,6 +69,9 @@ static esp_err_t apply() {
         strncpy(reinterpret_cast<char*>(ap.ap.password), kApPassword, sizeof(ap.ap.password) - 1);
         ap.ap.channel = 1;
         ap.ap.max_connection = 4;
+        // The default beacon (every 102.4 ms) is picked up by the microphone as a click at that rate. About 500 ms
+        // (the unit is 1.024 ms) gives five times fewer, and phones still find and join the network.
+        ap.ap.beacon_interval = 488;
         ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
         err = esp_wifi_set_config(WIFI_IF_AP, &ap);
         if (err != ESP_OK) return err;
@@ -92,7 +96,23 @@ esp_err_t init() {
     err = esp_event_loop_create_default();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
     s_sta_netif = esp_netif_create_default_wifi_sta();
-    esp_netif_create_default_wifi_ap();
+    esp_netif_t* ap_netif = esp_netif_create_default_wifi_ap();
+    // Tell phones on the setup network to use this device for DNS (webconfig's captive DNS answers every name with
+    // its address). Without it they ask their own DNS server, so typed names such as librarian.local and the
+    // automatic "sign in to network" page do not work and the IP address has to be typed.
+    {
+        esp_netif_ip_info_t ap_ip;
+        if (esp_netif_get_ip_info(ap_netif, &ap_ip) == ESP_OK) {
+            esp_netif_dns_info_t dns = {};
+            dns.ip.type = ESP_IPADDR_TYPE_V4;
+            dns.ip.u_addr.ip4 = ap_ip.ip;
+            dhcps_offer_t offer_dns = OFFER_DNS;
+            esp_netif_dhcps_stop(ap_netif);
+            esp_netif_set_dns_info(ap_netif, ESP_NETIF_DNS_MAIN, &dns);
+            esp_netif_dhcps_option(ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &offer_dns, sizeof(offer_dns));
+            esp_netif_dhcps_start(ap_netif);
+        }
+    }
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     err = esp_wifi_init(&init_cfg);
     if (err != ESP_OK) return err;
@@ -117,12 +137,20 @@ esp_err_t enable_ap() {
     uint8_t mac[6] = {};
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
     char name[24];
-    snprintf(name, sizeof(name), "BookBook-%02X%02X", mac[4], mac[5]);
+    snprintf(name, sizeof(name), "Librarian-%02X%02X", mac[4], mac[5]);
     s_ap_ssid = name;
     s_ap_enabled = true;
     ESP_LOGI(TAG, "setup AP \"%s\" up", name);
     return apply();
 }
+
+esp_err_t disable_ap() {
+    s_ap_enabled = false;
+    ESP_LOGI(TAG, "setup AP down");
+    return apply();
+}
+
+bool ap_enabled() { return s_ap_enabled; }
 
 bool connected() { return s_events && (xEventGroupGetBits(s_events) & kConnected); }
 

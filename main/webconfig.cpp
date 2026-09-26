@@ -11,6 +11,7 @@
 #include "config.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
@@ -27,6 +28,8 @@
 static const char* TAG = "web";
 static bool s_trust_ap;
 static bool s_dns_running;
+static volatile bool s_dns_stop;
+static volatile long long s_last_admin_ms;
 
 // ---- helpers ---------------------------------------------------------------------------------
 
@@ -47,8 +50,23 @@ static bool peer_is_setup_ap(httpd_req_t* req) {
     return (ntohl(ip4) & 0xFFFFFF00u) == 0xC0A80400u;  // 192.168.4.0/24, the setup AP subnet
 }
 
+// Shown when the login is missing or cancelled. On a phone the captive-portal sheet often cannot show the browser's
+// own login box, and then a person has to know to use the browser instead: so say so, and say what to type.
+static const char kLoginHelpHtml[] = R"HTML(<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Librarian setup</title>
+<style>body{font:20px/1.5 system-ui,sans-serif;margin:0;padding:1.5rem;max-width:34rem}h1{font-size:1.5rem}</style></head>
+<body><h1>Librarian setup</h1>
+<p><b>Use your browser to enter the username and password.</b></p>
+<p>Open your phone's web browser (Safari, Chrome or similar) and go to <b>librarian.local</b>. When it asks, sign in with
+the user name <b>admin</b> and the setup password.</p>
+</body></html>)HTML";
+
 static bool authorized(httpd_req_t* req) {
-    if (s_trust_ap && peer_is_setup_ap(req)) return true;
+    if (s_trust_ap && peer_is_setup_ap(req)) {
+        s_last_admin_ms = esp_timer_get_time() / 1000;
+        return true;
+    }
 
     char hdr[160];
     if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) == ESP_OK &&
@@ -59,13 +77,16 @@ static bool authorized(httpd_req_t* req) {
                                   reinterpret_cast<const unsigned char*>(hdr + 6), strlen(hdr + 6)) == 0) {
             decoded[olen] = 0;
             std::string want = "admin:" + config::get().admin_password;
-            if (want == reinterpret_cast<char*>(decoded)) return true;
+            if (want == reinterpret_cast<char*>(decoded)) {
+                s_last_admin_ms = esp_timer_get_time() / 1000;
+                return true;
+            }
         }
     }
     httpd_resp_set_status(req, "401 Unauthorized");
-    httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"BookBook setup\"");
-    httpd_resp_set_type(req, "text/plain");
-    httpd_resp_send(req, "Password required (user name: admin)", HTTPD_RESP_USE_STRLEN);
+    httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Librarian setup\"");
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_send(req, kLoginHelpHtml, HTTPD_RESP_USE_STRLEN);
     return false;
 }
 
@@ -214,7 +235,7 @@ static esp_err_t h_test_speak(httpd_req_t* req) {
     audio::set_volume(test_volume);
     ESP_LOGI(TAG, "speaker test at volume %d%% (saved: %d%%)", test_volume, c.volume);
     esp_err_t err = azure::speak(c.azure_region.c_str(), c.azure_key.c_str(),
-                                 "Testing, one, two, three. Book Book is working.");
+                                 "Testing, one, two, three.");
     audio::set_volume(c.volume);  // back to the saved level
     if (err != ESP_OK) return send_error(req, "502 Bad Gateway", "Azure speech request failed; check the key and region");
     cJSON* o = cJSON_CreateObject();
@@ -241,6 +262,39 @@ static esp_err_t h_test_va(httpd_req_t* req) {
 
 // Bring-up test for the microphone chain: beep, record 4 s, play it back (so you can judge level
 // and clarity by ear), transcribe it with Azure, and say what was heard.
+// Diagnostic: records `ms` milliseconds (default 4000, at most 10000) and returns them as a WAV file, exactly as the
+// microphone delivered them, or after the normal processing with processed=1. No beep, no playback: it is for looking
+// at the signal (for example for a repeating click) on a PC.  POST /api/test/mic-wav?ms=8000&processed=0
+static esp_err_t h_test_mic_wav(httpd_req_t* req) {
+    if (!authorized(req)) return ESP_OK;
+    char query[64] = {};
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+    char val[16];
+    int ms = 4000;
+    if (httpd_query_key_value(query, "ms", val, sizeof(val)) == ESP_OK) ms = atoi(val);
+    ms = ms < 500 ? 500 : (ms > 10000 ? 10000 : ms);
+    bool processed = false;
+    if (httpd_query_key_value(query, "processed", val, sizeof(val)) == ESP_OK) processed = atoi(val) != 0;
+
+    std::vector<int16_t> pcm;
+    mic::Stats stats;
+    if (mic::record(pcm, ms, &stats, processed) != ESP_OK) {
+        return send_error(req, "503 Service Unavailable", "Microphone not available");
+    }
+    const uint32_t data_bytes = static_cast<uint32_t>(pcm.size() * sizeof(int16_t));
+    uint8_t hdr[44] = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0,
+                       0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 16, 0, 'd', 'a', 't', 'a', 0, 0, 0, 0};
+    const uint32_t riff = 36 + data_bytes, rate = mic::kSampleRateHz, byte_rate = rate * 2;
+    memcpy(hdr + 4, &riff, 4);
+    memcpy(hdr + 24, &rate, 4);
+    memcpy(hdr + 28, &byte_rate, 4);
+    memcpy(hdr + 40, &data_bytes, 4);
+    httpd_resp_set_type(req, "audio/wav");
+    httpd_resp_send_chunk(req, reinterpret_cast<const char*>(hdr), sizeof(hdr));
+    httpd_resp_send_chunk(req, reinterpret_cast<const char*>(pcm.data()), data_bytes);
+    return httpd_resp_send_chunk(req, nullptr, 0);
+}
+
 static esp_err_t h_test_mic(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
     if (!wifi::connected()) return send_error(req, "409 Conflict", "Not on the internet yet: save Wi-Fi and restart first");
@@ -318,11 +372,20 @@ static void dns_task(void*) {
     }
     static const uint8_t kAnswer[] = {0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3C,
                                       0x00, 0x04, 192, 168, 4, 1};
+    timeval tv = {1, 0};  // wake once a second so a stop request is noticed
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     uint8_t buf[300];
     while (true) {
         sockaddr_in from = {};
         socklen_t flen = sizeof(from);
         int n = recvfrom(sock, buf, sizeof(buf) - sizeof(kAnswer), 0, reinterpret_cast<sockaddr*>(&from), &flen);
+        if (s_dns_stop) {
+            close(sock);
+            s_dns_stop = false;
+            s_dns_running = false;
+            vTaskDelete(nullptr);
+            return;
+        }
         if (n < 12) continue;
         // Find the end of the single question (name, type, class).
         int i = 12;
@@ -354,13 +417,19 @@ void start_captive_dns() {
     xTaskCreate(dns_task, "dns", 4096, nullptr, 3, nullptr);
 }
 
+void stop_captive_dns() {
+    if (s_dns_running) s_dns_stop = true;  // the task closes its socket and ends within a second
+}
+
+long long last_admin_activity_ms() { return s_last_admin_ms; }
+
 esp_err_t start(bool trust_setup_ap) {
     s_trust_ap = trust_setup_ap;
 
     if (mdns_init() == ESP_OK) {
-        mdns_hostname_set("bookbook");
-        mdns_instance_name_set("BookBook");
-        mdns_service_add("BookBook setup", "_http", "_tcp", 80, nullptr, 0);
+        mdns_hostname_set("librarian");
+        mdns_instance_name_set("Librarian");
+        mdns_service_add("Librarian setup", "_http", "_tcp", 80, nullptr, 0);
     }
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
@@ -383,6 +452,7 @@ esp_err_t start(bool trust_setup_ap) {
         {"/api/test/speak", HTTP_POST, h_test_speak, nullptr},
         {"/api/test/va", HTTP_POST, h_test_va, nullptr},
         {"/api/test/mic", HTTP_POST, h_test_mic, nullptr},
+        {"/api/test/mic-wav", HTTP_POST, h_test_mic_wav, nullptr},
         {"/api/reboot", HTTP_POST, h_reboot, nullptr},
         {"/*", HTTP_GET, h_redirect, nullptr},  // last: captive-portal probes and unknown paths
     };

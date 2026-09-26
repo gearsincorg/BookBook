@@ -36,6 +36,7 @@ void process(std::vector<int16_t>& pcm, Stats* stats = nullptr);
 
 // Records `ms` milliseconds (after discarding ~150 ms of start-up noise), removes DC offset and
 // applies the configured gain. Blocks for the duration.
-esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats = nullptr);
+// With process_audio false the samples are returned exactly as the microphone delivered them (diagnostics).
+esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats = nullptr, bool process_audio = true);
 
 }  // namespace mic

@@ -122,7 +122,7 @@ menu "BookBook"
             secrets/sdkconfig.secrets rather than committing a real value.
 
     config BOOKBOOK_SETUP_AP_PASSWORD
-        string "Password of the BookBook-XXXX setup Wi-Fi network (8-63 characters)"
+        string "Password of the Librarian-XXXX setup Wi-Fi network (8-63 characters)"
         default "bookbook1"
         help
             Anyone who knows this can join the setup network. Override it in the git-ignored

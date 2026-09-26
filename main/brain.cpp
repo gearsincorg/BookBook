@@ -14,6 +14,7 @@
 #include "sdkconfig.h"
 #include "memory.h"
 #include "ota.h"
+#include "setupnet.h"
 #include "va.h"
 
 static const char* TAG = "brain";
@@ -28,7 +29,7 @@ constexpr size_t kMaxResponseBytes = 96 * 1024;
 // The librarian's conversation rules, tuned for speech. Sections are marked "// == Title ==".
 // docs/conversation-rules.md is generated from this block: run tools/rules_doc.py after editing.
 const char kSystemPrompt[] =
-    "You are BookBook, a voice librarian for a vision-impaired member of the Vision Australia Library. "
+    "You are Librarian, a voice librarian for a vision-impaired member of the Vision Australia Library. "
     "Everything you say is spoken aloud by a text-to-speech voice, and the member talks to you by holding a "
     "button, so what you receive is speech recognition and may be slightly wrong. There is no "
     "screen.\n\nRules:\n"
@@ -165,7 +166,16 @@ const char kSystemPrompt[] =
     "enough if they ask which version is newer.\n"
     "31. If the member asks which version of the software you are running, call get_version and say it "
     "plainly, for example 'I am running version 1.3.0.' If developmentBuild is true, say it is a test build "
-    "based on that version. Give the build date only if they ask for it.\n";
+    "based on that version. Give the build date only if they ask for it.\n"
+    // == Setup mode ==
+    "32. If the member asks about setup mode, the setup network, the setup or admin page, or changing your "
+    "Wi-Fi settings, do not explain it at length: ask whether they would like you to create a wireless "
+    "access point for setup. Only when they clearly say yes in their next message, call start_setup_network. "
+    "Then tell them the network's name, read out as the spokenName in the result, and that it stays open "
+    "until ten minutes after they last use the setup page. Tell them to join that network on their phone or "
+    "computer, open a web browser and go to the address in spokenAddress. If automatic is true it was already "
+    "open because "
+    "your Wi-Fi is down. Never say a password.\n";
 
 const char kToolsJson[] = R"JSON([
  {"name":"search_library",
@@ -300,6 +310,9 @@ const char kToolsJson[] = R"JSON([
   "input_schema":{"type":"object","properties":{}}},
  {"name":"get_version",
   "description":"Get the version of your own software that is running now. Only when the member asks which version you are running. Changes nothing.",
+  "input_schema":{"type":"object","properties":{}}},
+ {"name":"start_setup_network",
+  "description":"Open the setup Wi-Fi network (a wireless access point) so the member or a helper can change settings on the setup page. Only after you asked whether they would like one and they said yes. It closes by itself ten minutes after the setup page was last used.",
   "input_schema":{"type":"object","properties":{}}},
  {"name":"install_update",
   "description":"Install the published update to your own software. Only when the member has asked you to update. It starts after you have finished speaking, takes less than a minute, and restarts you.",
@@ -764,6 +777,20 @@ std::string tool_get_version() {
     return print(o);
 }
 
+std::string tool_start_setup_network(bool* is_error) {
+    setupnet::Opened opened;
+    if (setupnet::open_on_request(opened) != ESP_OK) {
+        *is_error = true;
+        return "Could not start the setup network.";
+    }
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "spokenName", opened.spoken.c_str());
+    cJSON_AddBoolToObject(o, "automatic", opened.automatic);
+    cJSON_AddStringToObject(o, "spokenAddress", setupnet::kSpokenAddress);
+    cJSON_AddNumberToObject(o, "closesMinutesAfterLastUse", setupnet::kIdleCloseMinutes);
+    return print(o);
+}
+
 std::string tool_install_update(const Config& c, bool* is_error) {
     ota::Info info;
     esp_err_t err = ota::check(c, info);
@@ -1093,6 +1120,7 @@ std::string run_tool(const Config& c, const std::string& name, cJSON* input, boo
     if (name == "check_for_update") return tool_check_update(c, is_error);
     if (name == "install_update") return tool_install_update(c, is_error);
     if (name == "get_version") return tool_get_version();
+    if (name == "start_setup_network") return tool_start_setup_network(is_error);
     if (name == "subscribe_to_periodical") return tool_subscribe(c, input, is_error);
     if (name == "unsubscribe_from_periodical") return tool_unsubscribe(c, input, is_error);
     *is_error = true;

@@ -240,7 +240,7 @@ extern "C" void app_main() {
 
     // Keep hands off the touch pad while powering up: it calibrates against the untouched pad (a high
     // calibration recovers by itself, see touch.cpp). Setup is reached over the normal Wi-Fi
-    // (http://bookbook.local/); the setup network starts by itself when Wi-Fi is missing or fails.
+    // (http://librarian.local/); the setup network starts by itself when Wi-Fi is missing or fails.
     bool have_wifi = !cfg.wifi_ssid.empty();
 
     ESP_ERROR_CHECK(wifi::init());
@@ -258,7 +258,7 @@ extern "C" void app_main() {
 
     if (online) {
         ESP_LOGI(TAG, "time sync: %s", esp_err_to_name(wifi::sync_time(15000)));
-        ESP_LOGI(TAG, "setup page: http://%s/ or http://bookbook.local/", wifi::ip().c_str());
+        ESP_LOGI(TAG, "setup page: http://%s/ or http://librarian.local/", wifi::ip().c_str());
         // After an update the restart is the only place the result is known: say it before the greeting.
         std::string intro = "Hi! I'm Marian, your librarian. When the lights are green, just press and hold to talk to me.";
         switch (ota::take_boot_report()) {
