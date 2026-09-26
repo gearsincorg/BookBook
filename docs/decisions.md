@@ -101,3 +101,16 @@ Owner requirement: no wake word for every request (less conversational), but no 
 ## Development without the board
 
 Hardware arrives in a few days. Board IO sits behind `board.h`, so networking, Azure STT/TTS (fed from WAV files), VA client, Claude loop, memory and the web config portal can be developed on any ESP32-S3. Check the spare boards' PSRAM (N16R8 / N8R2 / none) before relying on them: TLS plus audio buffers need PSRAM.
+
+## Bookworm's status (owner, 2026-09-26)
+
+Bookworm was the **development version** of BookBook. It will either be retired or brought up to the BookBook
+standard. BookBook is the reference now: where the two differ, BookBook's behaviour wins, and compatibility with
+Bookworm's file format is a convenience, not a requirement. Some choices made only to stay compatible could be
+revisited once Bookworm is retired or updated: a favourite book is a rating of 4 or 5 (there is no separate flag,
+and favourites that were never borrowed have no dates), and the standby list lives in its own blob
+(`standby.json`) instead of inside `memory.json`.
+
+BookBook additions on top of Bookworm's design: practice mode; the standby (save-for-later) list; the authors and
+books lists that fill themselves from bookshelf adds; verified removal of authors and books from those lists;
+baked-in program settings with only the member's environment editable; touch-pad push-to-talk.

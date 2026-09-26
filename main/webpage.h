@@ -161,7 +161,7 @@ $('askbtn').addEventListener('click', async () => {
 
 $('testmem').addEventListener('click', async () => {
   say('Reading the memory file…');
-  try { const r = await api('/api/test/memory', { method: 'POST' }); say('Memory works. Remembered: ' + r.preferences + ' preferences, ' + r.authors + ' authors, ' + r.genres + ' genres, ' + r.history + ' books read.', 'ok'); }
+  try { const r = await api('/api/test/memory', { method: 'POST' }); say('Memory works. Remembered: ' + r.preferences + ' preferences, ' + r.authors + ' authors, ' + r.genres + ' genres, ' + r.history + ' books read, ' + r.standby + ' on standby.', 'ok'); }
   catch (e) { say(e.message, 'bad'); }
 });
 

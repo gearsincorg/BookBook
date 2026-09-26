@@ -19,7 +19,7 @@ esp_err_t load(const Config& c);  // (re)read from Azure; a missing blob means e
 bool loaded();
 
 struct Counts {
-    int preferences = 0, notes = 0, authors = 0, genres = 0, history = 0;
+    int preferences = 0, notes = 0, authors = 0, genres = 0, history = 0, standby = 0;
 };
 Counts counts();
 
@@ -55,6 +55,23 @@ esp_err_t remove_book(const Config& c, const std::string& title, std::string* ma
 // (so already-owned or already-read titles are not suggested again). Genre and theme reasoning is left to
 // the model. Works without memory (then only the shelf is used).
 std::string reading_profile(const va::Shelf& shelf);
+
+// ---- Standby list: BookBook's own "save for later" list, an alternative to putting a book on the bookshelf
+// (and separate from the library's request list, which really queues the title with the library).
+// Kept in its own blob, standby.json, in the same container: Bookworm rewrites memory.json from its own
+// model and would silently drop a field it does not know, so the list must not live there. Entries are a
+// book or a series: Title, Author, BookshareId (if known), Note, DateAdded. Never listed twice (by
+// catalogue id, else exact title).
+esp_err_t standby_list(const Config& c, std::string* json);  // JSON array of the entries
+esp_err_t standby_add(const Config& c, const std::string& title, const std::string& author,
+                      const std::string& bookshare_id, const std::string& note, bool* created);
+// Removes one entry: exact title (ignoring case), else a unique partial match. ESP_ERR_NOT_FOUND if none,
+// ESP_ERR_INVALID_SIZE if several match (count in *matches).
+esp_err_t standby_remove(const Config& c, const std::string& title, std::string* matched_title, int* matches);
+// Used when a book moves to the bookshelf: removes the entry named `entry_title` if given, else the one with
+// this catalogue id, else the one with exactly this title. ESP_ERR_NOT_FOUND (not a failure) if none.
+esp_err_t standby_take(const Config& c, const std::string& bookshare_id, const std::string& title,
+                       const std::string& entry_title, std::string* removed_title);
 
 std::string preferred_authors_json();std::string preferred_authors_json();
 std::string preferred_genres_json();

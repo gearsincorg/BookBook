@@ -58,8 +58,9 @@ const char kSystemPrompt[] =
     "ask whether to go ahead, and only call the remove tool after the member clearly says yes in their next "
     "message.\n"
     "11. When adding to the bookshelf, use a format from that title's formats list, preferring "
-    "DAISY_Audio_Human, otherwise another audio format. If the bookshelf is full (no free slots), offer to add "
-    "the title to the request list instead.\n"
+    "DAISY_Audio_Human, otherwise another audio format. If the bookshelf is full (no free slots), suggest "
+    "saving the title on the standby list, or alternatively adding it to the library's request list (which "
+    "queues it with the library).\n"
     "13. Use remember_preference whenever the member states a preference outside a normal search (favourite "
     "genres or authors, formats, things to avoid), and recall_preferences when it would help answer. What you "
     "already remember is listed below the rules.\n"
@@ -91,6 +92,17 @@ const char kSystemPrompt[] =
     "already know, that is fine.\n"
     "20. When the member asks what they have been reading lately or what kind of books they like, answer "
     "conversationally from the profile (favourite authors, a couple of favourites) rather than listing titles.\n"
+    "21. There is a standby list: the member's own save-for-later list, kept by you, separate from the "
+    "library's request list. When the member has found a book or series they want but has not said what to do "
+    "with it, offer the choice in one short question: put it on the bookshelf now, or save it on the standby "
+    "list for later. 'Add it' means the bookshelf; 'save it', 'for later' or 'standby' means add_to_standby, "
+    "which needs no confirmation. A series can go on the list under its series name.\n"
+    "22. To move something from the standby list to the bookshelf, use add_to_bookshelf (find its id and a "
+    "format with search_library if the entry has no id). That removes the standby entry by itself; if the entry "
+    "is a series or is titled differently, pass standbyEntry, and pass keepOnStandby only if the member wants "
+    "it kept on standby too. 'What is on my standby list' is answered with get_standby_list.\n"
+    "23. When the member asks to delete something from the standby list, just do it with remove_from_standby, "
+    "with no confirmation, and say which entry you removed. If several entries match, ask which one.\n"
     "12. If a tool result says dryRun, the change was only pretended (practice mode). Tell the member it was a "
     "practice run and that nothing on their real library account changed.\n";
 
@@ -111,6 +123,8 @@ const char kToolsJson[] = R"JSON([
     "format":{"type":"string","description":"A formatId from the search result's formats list, e.g. DAISY_Audio_Human."},
     "title":{"type":"string","description":"The title, from the search result."},
     "author":{"type":"string","description":"The author, from the search result, if known."},
+    "standbyEntry":{"type":"string","description":"If this book is being moved off the standby list under a different title (for example a series), that entry's title. Otherwise omit."},
+    "keepOnStandby":{"type":"boolean","description":"True only if the member wants it to stay on the standby list too. Normally omit: the standby entry is removed when the book goes on the bookshelf."},
     "type":{"type":"string","enum":["book","music","periodical"],"description":"Defaults to book."}},
    "required":["bookshareId","format","title"]}},
  {"name":"remove_from_bookshelf",
@@ -181,6 +195,22 @@ const char kToolsJson[] = R"JSON([
  {"name":"get_reading_profile",
   "description":"Get a summary of the member's taste: their most frequent authors, favourite authors and books, what is on the bookshelf now, and their books list. Use it to ground 'what should I read next' and 'something like X' requests, to recognise books they already have or have read so they are not suggested again, and to answer 'what have I been reading lately?'.",
   "input_schema":{"type":"object","properties":{}}},
+ {"name":"add_to_standby",
+  "description":"Save a book or a series on the member's standby list: their own save-for-later list, an alternative to putting it on the bookshelf now. It is separate from the library's request list (which really queues the title with the library). Do this straight away when asked; no confirmation needed. A series can go on the list under its series name, with the detail in the note.",
+  "input_schema":{"type":"object","properties":{
+    "title":{"type":"string","description":"The book's title, or the series name."},
+    "author":{"type":"string","description":"The author, if known, in natural order."},
+    "bookshareId":{"type":"string","description":"The catalogue id from a search result, if you have it (a single book, not a series)."},
+    "note":{"type":"string","description":"A short note, e.g. 'series: start with The Last Kingdom'."}},
+   "required":["title"]}},
+ {"name":"get_standby_list",
+  "description":"Get everything on the member's standby (save-for-later) list.",
+  "input_schema":{"type":"object","properties":{}}},
+ {"name":"remove_from_standby",
+  "description":"Delete an entry from the standby list without putting it on the bookshelf. Do this straight away when asked; no confirmation is needed for this list. (When a book moves to the bookshelf, add_to_bookshelf removes its standby entry by itself.)",
+  "input_schema":{"type":"object","properties":{
+    "title":{"type":"string","description":"The entry's title (a partial title is fine if it matches only one entry)."}},
+   "required":["title"]}},
  {"name":"get_request_list",
   "description":"Get the request list: titles saved to read later, which move to the bookshelf when a loan slot frees up.",
   "input_schema":{"type":"object","properties":{}}}
@@ -408,6 +438,8 @@ std::string dry_run_result(const char* action, const std::string& title) {
 std::string tool_add_bookshelf(const Config& c, cJSON* input, bool* is_error) {
     std::string id = arg(input, "bookshareId"), format = arg(input, "format"), title = arg(input, "title");
     std::string author = va::natural_author(arg(input, "author"));
+    const bool keep_on_standby = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(input, "keepOnStandby"));
+    const std::string standby_entry = arg(input, "standbyEntry");
     std::string type = arg(input, "type");
     if (type.empty()) type = "book";
     if (id.empty() || format.empty()) {
@@ -426,7 +458,7 @@ std::string tool_add_bookshelf(const Config& c, cJSON* input, bool* is_error) {
     // Check the 20-slot cap ourselves rather than letting the portal reject it silently.
     if (type != "periodical" && before.loan_count >= va::kLoanCap) {
         *is_error = true;
-        return "The bookshelf is full (20 of 20 loan slots used). Offer to add it to the request list instead.";
+        return "The bookshelf is full (20 of 20 loan slots used). Suggest saving it on the standby list instead, or adding it to the request list.";
     }
     for (const auto& b : before.books) {
         if (b.bookshare_id == id) {
@@ -468,6 +500,13 @@ std::string tool_add_bookshelf(const Config& c, cJSON* input, bool* is_error) {
         bool logged = memory::log_added(c, title, author, id, &author_added) == ESP_OK;
         cJSON_AddBoolToObject(o, "loggedToReadingHistory", logged);
         cJSON_AddBoolToObject(o, "authorAddedToAuthorsList", author_added);
+        // Moving a book from the standby list to the bookshelf takes it off standby (unless asked to keep it).
+        if (!keep_on_standby) {
+            std::string taken;
+            if (memory::standby_take(c, id, title, standby_entry, &taken) == ESP_OK && !taken.empty()) {
+                cJSON_AddStringToObject(o, "removedFromStandby", taken.c_str());
+            }
+        }
     }
     cJSON_AddBoolToObject(o, "authorAlreadyInPreferredAuthors", info.author_known);
     cJSON_AddItemToObject(o, "currentPreferredGenres", cJSON_Parse(info.genres_json.c_str()));
@@ -581,6 +620,57 @@ std::string memory_tool(const Config& c, const std::string& name, cJSON* input, 
             return "Missing required argument: note";
         }
         return ok_or_fail(memory::remember(c, note), "the note");
+    }
+    if (name == "add_to_standby") {
+        std::string title = arg(input, "title");
+        if (title.empty()) {
+            *is_error = true;
+            return "Missing required argument: title";
+        }
+        bool created = false;
+        if (memory::standby_add(c, title, arg(input, "author"), arg(input, "bookshareId"), arg(input, "note"), &created) != ESP_OK) {
+            *is_error = true;
+            return "Could not save to the standby list.";
+        }
+        cJSON* o = cJSON_CreateObject();
+        cJSON_AddBoolToObject(o, "success", true);
+        cJSON_AddStringToObject(o, "title", title.c_str());
+        cJSON_AddBoolToObject(o, "newOnStandby", created);
+        return print(o);
+    }
+    if (name == "get_standby_list") {
+        std::string json;
+        if (memory::standby_list(c, &json) != ESP_OK) {
+            *is_error = true;
+            return "Could not read the standby list.";
+        }
+        return json;
+    }
+    if (name == "remove_from_standby") {
+        std::string title = arg(input, "title");
+        if (title.empty()) {
+            *is_error = true;
+            return "Missing required argument: title";
+        }
+        std::string matched;
+        int matches = 0;
+        esp_err_t e = memory::standby_remove(c, title, &matched, &matches);
+        if (e == ESP_ERR_NOT_FOUND) {
+            *is_error = true;
+            return "Nothing on the standby list matches that. Call get_standby_list to see what is there.";
+        }
+        if (e == ESP_ERR_INVALID_SIZE) {
+            *is_error = true;
+            return std::to_string(matches) + " entries match that; ask the member which one.";
+        }
+        if (e != ESP_OK) {
+            *is_error = true;
+            return "Could not save that change.";
+        }
+        cJSON* o = cJSON_CreateObject();
+        cJSON_AddBoolToObject(o, "success", true);
+        cJSON_AddStringToObject(o, "removed", matched.c_str());
+        return print(o);
     }
     if (name == "recall_preferences") return memory::recall();
     if (name == "search_reading_history") return memory::search_history(arg(input, "query"));
@@ -708,7 +798,8 @@ std::string memory_tool(const Config& c, const std::string& name, cJSON* input, 
 
 std::string run_tool(const Config& c, const std::string& name, cJSON* input, bool* is_error) {
     if (name == "remember_preference" || name == "recall_preferences" || name == "search_reading_history" ||
-        name == "rate_book" || name == "add_book" || name == "remove_book" || name == "get_preferred_authors" || name == "add_preferred_author" ||
+        name == "rate_book" || name == "add_book" || name == "remove_book" || name == "add_to_standby" ||
+        name == "get_standby_list" || name == "remove_from_standby" || name == "get_preferred_authors" || name == "add_preferred_author" ||
         name == "get_preferred_genres" || name == "add_preferred_genre" || name == "remove_preferred_author") {
         return memory_tool(c, name, input, is_error);
     }

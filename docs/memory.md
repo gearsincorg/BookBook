@@ -23,6 +23,21 @@ some of which are favourites.**
 | Duplicates | none: matched by catalogue id, else exact title. Adding to the bookshelf a book that is already listed (for example a favourite added earlier, or one borrowed before) reuses its entry with a fresh add date, no remove date, and its rating kept |
 | Dates | set when the book goes on / comes off the bookshelf; a favourite that was never borrowed has neither |
 
+## Standby list (`standby.json`)
+
+BookBook's own **save for later** list: an alternative to putting a found book or series on the bookshelf. It is
+separate from the library's request list, which really queues the title with the library and moves it to the
+bookshelf by itself when a slot frees up; the standby list does nothing on the library's side.
+
+| | |
+|---|---|
+| Gets on the list | the member asks (`add_to_standby`): a single book, or a series under its series name with a note. When the member has found something but not said what to do with it, the assistant offers the choice: bookshelf now, or standby. When the bookshelf is full (20 of 20), standby is the first thing it suggests, then the request list |
+| Reading it | `get_standby_list` ("what's on my standby list"); the titles are also in the assistant's system prompt |
+| Moving to the bookshelf | `add_to_bookshelf`, which **removes the standby entry by itself** (matched by catalogue id, else exact title; `standbyEntry` names the entry when the title differs, for example a series; `keepOnStandby` true keeps it) |
+| Removal | `remove_from_standby`, **no verification**: it is the member's own scratch list |
+| Duplicates | none (catalogue id, else exact title) |
+| Storage | its **own blob** in the same container. Bookworm rewrites `memory.json` from its own model and would silently drop a field it does not know, so the list is kept out of that file. Once Bookworm is retired or updated, it could be folded into `memory.json` |
+
 ## Other memory
 
 Free-text preferences (`remember_preference`), preferred genres (`add_preferred_genre`) and star ratings

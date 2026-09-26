@@ -54,10 +54,10 @@ esp_err_t on_event(esp_http_client_event_t* e) {
 }
 
 // One request to the blob's SAS URL. `if_match` / `if_none_match` are optional preconditions.
-esp_err_t http(const Config& c, esp_http_client_method_t method, const std::string* body, const std::string& if_match,
-               bool if_none_match_star, Response& out) {
+esp_err_t http(const std::string& url, esp_http_client_method_t method, const std::string* body,
+               const std::string& if_match, bool if_none_match_star, Response& out) {
     esp_http_client_config_t cfg = {};
-    cfg.url = c.memory_url.c_str();
+    cfg.url = url.c_str();
     cfg.method = method;
     cfg.event_handler = on_event;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
@@ -142,7 +142,7 @@ std::string print(cJSON* j, bool take = true) {
 esp_err_t load_locked(const Config& c) {
     if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
     Response r;
-    esp_err_t err = http(c, HTTP_METHOD_GET, nullptr, "", false, r);
+    esp_err_t err = http(c.memory_url, HTTP_METHOD_GET, nullptr, "", false, r);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "load failed: %s", esp_err_to_name(err));
         return err;
@@ -181,7 +181,7 @@ esp_err_t update(const Config& c, const std::function<void()>& mutate) {
         mutate();
         std::string body = print(s_doc, false);
         Response r;
-        esp_err_t err = http(c, HTTP_METHOD_PUT, &body, s_etag, s_etag.empty(), r);
+        esp_err_t err = http(c.memory_url, HTTP_METHOD_PUT, &body, s_etag, s_etag.empty(), r);
         if (err == ESP_OK && (r.status == 200 || r.status == 201)) {
             s_etag = r.etag;
             ESP_LOGI(TAG, "saved (%u bytes)", static_cast<unsigned>(body.size()));
@@ -196,6 +196,118 @@ esp_err_t update(const Config& c, const std::function<void()>& mutate) {
     return ESP_FAIL;
 }
 
+// ---- standby list: its own blob (see memory.h) --------------------------------------------------
+
+cJSON* s_standby;  // {"Books":[...]} (owned)
+std::string s_standby_etag;
+bool s_standby_loaded;
+
+// The memory URL points at .../memory.json?<sas>; the same container token reaches its other blobs.
+std::string blob_url(const std::string& base, const char* blob) {
+    size_t q = base.find('?');
+    std::string path = base.substr(0, q);
+    std::string query = q == std::string::npos ? "" : base.substr(q);
+    size_t slash = path.rfind('/');
+    return path.substr(0, slash + 1) + blob + query;
+}
+
+cJSON* standby_books() {
+    if (!s_standby) s_standby = cJSON_CreateObject();
+    cJSON* a = cJSON_GetObjectItemCaseSensitive(s_standby, "Books");
+    if (!cJSON_IsArray(a)) {
+        cJSON_DeleteItemFromObjectCaseSensitive(s_standby, "Books");
+        a = cJSON_CreateArray();
+        cJSON_AddItemToObject(s_standby, "Books", a);
+    }
+    return a;
+}
+
+esp_err_t standby_load_locked(const Config& c) {
+    if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
+    Response r;
+    esp_err_t err = http(blob_url(c.memory_url, "standby.json"), HTTP_METHOD_GET, nullptr, "", false, r);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "standby load failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    cJSON* doc = nullptr;
+    if (r.status == 200) {
+        doc = cJSON_ParseWithLength(r.body.data(), r.body.size());
+        if (!cJSON_IsObject(doc)) {
+            cJSON_Delete(doc);
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+        s_standby_etag = r.etag;
+    } else if (r.status == 404) {
+        doc = cJSON_CreateObject();  // nothing saved yet
+        s_standby_etag.clear();
+    } else {
+        ESP_LOGW(TAG, "standby load: HTTP %d: %.200s", r.status, r.body.c_str());
+        return ESP_FAIL;
+    }
+    cJSON_Delete(s_standby);
+    s_standby = doc;
+    s_standby_loaded = true;
+    return ESP_OK;
+}
+
+// Same optimistic-concurrency save as update(), for standby.json.
+esp_err_t standby_update(const Config& c, const std::function<void()>& mutate) {
+    if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
+    if (!s_standby_loaded) {
+        esp_err_t err = standby_load_locked(c);
+        if (err != ESP_OK) return err;
+    }
+    const std::string url = blob_url(c.memory_url, "standby.json");
+    for (int attempt = 0; attempt < 2; attempt++) {
+        mutate();
+        std::string body = print(s_standby, false);
+        Response r;
+        esp_err_t err = http(url, HTTP_METHOD_PUT, &body, s_standby_etag, s_standby_etag.empty(), r);
+        if (err == ESP_OK && (r.status == 200 || r.status == 201)) {
+            s_standby_etag = r.etag;
+            ESP_LOGI(TAG, "standby saved (%u bytes)", static_cast<unsigned>(body.size()));
+            return ESP_OK;
+        }
+        bool conflict = err == ESP_OK && (r.status == 412 || r.status == 409);
+        ESP_LOGW(TAG, "standby save %s: %s HTTP %d: %.200s", conflict ? "conflict" : "failed", esp_err_to_name(err),
+                 r.status, r.body.c_str());
+        if (standby_load_locked(c) != ESP_OK || !conflict) return ESP_FAIL;
+    }
+    return ESP_FAIL;
+}
+
+cJSON* standby_find(const std::string& title, const std::string& bookshare_id) {
+    cJSON* e;
+    if (!bookshare_id.empty()) {
+        cJSON_ArrayForEach(e, standby_books()) {
+            if (str(e, "BookshareId") == bookshare_id) return e;
+        }
+    }
+    if (!title.empty()) {
+        cJSON_ArrayForEach(e, standby_books()) {
+            if (lower(str(e, "Title")) == lower(title)) return e;
+        }
+    }
+    return nullptr;
+}
+
+esp_err_t standby_ensure_loaded(const Config& c) {
+    if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
+    return s_standby_loaded ? ESP_OK : standby_load_locked(c);
+}
+
+void standby_delete(const std::string& title) {
+    cJSON* list = standby_books();
+    int n = cJSON_GetArraySize(list);
+    for (int i = 0; i < n; i++) {
+        if (str(cJSON_GetArrayItem(list, i), "Title") == title) {
+            cJSON_DeleteItemFromArray(list, i);
+            return;
+        }
+    }
+}
+
 }  // namespace
 
 namespace memory {
@@ -204,7 +316,9 @@ bool configured(const Config& c) { return !c.memory_url.empty(); }
 
 esp_err_t load(const Config& c) {
     Lock lock;
-    return load_locked(c);
+    esp_err_t err = load_locked(c);
+    if (err == ESP_OK) standby_load_locked(c);  // best effort: the standby list is a separate file
+    return err;
 }
 
 bool loaded() {
@@ -221,6 +335,7 @@ Counts counts() {
     n.authors = cJSON_GetArraySize(arr("PreferredAuthors"));
     n.genres = cJSON_GetArraySize(arr("PreferredGenres"));
     n.history = cJSON_GetArraySize(arr("ReadingHistory"));
+    n.standby = s_standby_loaded ? cJSON_GetArraySize(standby_books()) : 0;
     return n;
 }
 
@@ -242,6 +357,15 @@ std::string prompt_snapshot() {
         cJSON_AddItemToArray(authors, x);
     }
     cJSON_AddItemToObject(o, "preferredGenres", cJSON_Duplicate(arr("PreferredGenres"), true));
+    if (s_standby_loaded) {  // the member's save-for-later list (titles only; get_standby_list has the detail)
+        cJSON* sb = cJSON_AddArrayToObject(o, "standbyList");
+        const cJSON* s;
+        int shown = 0;
+        cJSON_ArrayForEach(s, standby_books()) {
+            if (shown++ >= 30) break;
+            cJSON_AddItemToArray(sb, cJSON_CreateString(str(s, "Title").c_str()));
+        }
+    }
     // Books the member rated 4 or 5 (their favourites), capped so the prompt stays small.
     cJSON* favs = cJSON_AddArrayToObject(o, "favoriteBooks");
     const cJSON* h;
@@ -483,6 +607,95 @@ std::string reading_profile(const va::Shelf& shelf) {
     cJSON_AddNumberToObject(o, "loanSlotsUsed", shelf.loan_count);
     cJSON_AddNumberToObject(o, "loanSlotsTotal", va::kLoanCap);
     return print(o);
+}
+
+esp_err_t standby_list(const Config& c, std::string* json) {
+    Lock lock;
+    esp_err_t err = standby_ensure_loaded(c);
+    if (err != ESP_OK) return err;
+    cJSON* out = cJSON_CreateArray();
+    const cJSON* e;
+    cJSON_ArrayForEach(e, standby_books()) {
+        cJSON* x = cJSON_CreateObject();
+        cJSON_AddStringToObject(x, "title", str(e, "Title").c_str());
+        std::string who = va::natural_author(str(e, "Author"));
+        if (!who.empty()) cJSON_AddStringToObject(x, "author", who.c_str());
+        if (!str(e, "BookshareId").empty()) cJSON_AddStringToObject(x, "bookshareId", str(e, "BookshareId").c_str());
+        if (!str(e, "Note").empty()) cJSON_AddStringToObject(x, "note", str(e, "Note").c_str());
+        if (!str(e, "DateAdded").empty()) cJSON_AddStringToObject(x, "dateAdded", str(e, "DateAdded").c_str());
+        cJSON_AddItemToArray(out, x);
+    }
+    if (json) *json = print(out);
+    else cJSON_Delete(out);
+    return ESP_OK;
+}
+
+esp_err_t standby_add(const Config& c, const std::string& title, const std::string& author,
+                      const std::string& bookshare_id, const std::string& note, bool* created) {
+    Lock lock;
+    bool made = false;
+    std::string nat = va::natural_author(author);
+    esp_err_t err = standby_update(c, [&] {
+        if (cJSON* e = standby_find(title, bookshare_id)) {  // already there: fill in what was missing
+            made = false;
+            if (str(e, "Author").empty() && !nat.empty()) {
+                cJSON_DeleteItemFromObjectCaseSensitive(e, "Author");
+                cJSON_AddStringToObject(e, "Author", nat.c_str());
+            }
+            if (str(e, "BookshareId").empty() && !bookshare_id.empty()) {
+                cJSON_DeleteItemFromObjectCaseSensitive(e, "BookshareId");
+                cJSON_AddStringToObject(e, "BookshareId", bookshare_id.c_str());
+            }
+            if (!note.empty()) {
+                cJSON_DeleteItemFromObjectCaseSensitive(e, "Note");
+                cJSON_AddStringToObject(e, "Note", note.c_str());
+            }
+            return;
+        }
+        made = true;
+        cJSON* e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "Title", title.c_str());
+        if (!nat.empty()) cJSON_AddStringToObject(e, "Author", nat.c_str());
+        if (!bookshare_id.empty()) cJSON_AddStringToObject(e, "BookshareId", bookshare_id.c_str());
+        if (!note.empty()) cJSON_AddStringToObject(e, "Note", note.c_str());
+        std::string when = now_iso();
+        if (!when.empty()) cJSON_AddStringToObject(e, "DateAdded", when.c_str());
+        cJSON_AddItemToArray(standby_books(), e);
+    });
+    if (created) *created = made;
+    return err;
+}
+
+esp_err_t standby_remove(const Config& c, const std::string& title, std::string* matched_title, int* matches) {
+    Lock lock;
+    esp_err_t err = standby_ensure_loaded(c);
+    if (err != ESP_OK) return err;
+    std::vector<std::string> exact, partial;
+    const cJSON* e;
+    cJSON_ArrayForEach(e, standby_books()) {
+        std::string t = str(e, "Title");
+        if (lower(t) == lower(title)) exact.push_back(t);
+        else if (contains_ci(t, title)) partial.push_back(t);
+    }
+    const std::vector<std::string>& hits = !exact.empty() ? exact : partial;
+    if (matches) *matches = static_cast<int>(hits.size());
+    if (hits.empty()) return ESP_ERR_NOT_FOUND;
+    if (hits.size() > 1) return ESP_ERR_INVALID_SIZE;
+    const std::string found = hits[0];
+    if (matched_title) *matched_title = found;
+    return standby_update(c, [&] { standby_delete(found); });
+}
+
+esp_err_t standby_take(const Config& c, const std::string& bookshare_id, const std::string& title,
+                       const std::string& entry_title, std::string* removed_title) {
+    Lock lock;
+    esp_err_t err = standby_ensure_loaded(c);
+    if (err != ESP_OK) return err;
+    const cJSON* e = !entry_title.empty() ? standby_find(entry_title, "") : standby_find(title, bookshare_id);
+    if (!e) return ESP_ERR_NOT_FOUND;
+    const std::string found = str(e, "Title");
+    if (removed_title) *removed_title = found;
+    return standby_update(c, [&] { standby_delete(found); });
 }
 
 esp_err_t rate(const Config& c, const std::string& title, int rating, std::string* matched_title, int* matches) {

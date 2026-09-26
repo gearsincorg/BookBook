@@ -311,6 +311,7 @@ static esp_err_t h_test_memory(httpd_req_t* req) {
     cJSON_AddNumberToObject(o, "authors", n.authors);
     cJSON_AddNumberToObject(o, "genres", n.genres);
     cJSON_AddNumberToObject(o, "history", n.history);
+    cJSON_AddNumberToObject(o, "standby", n.standby);
     return send_json(req, o);
 }
 
