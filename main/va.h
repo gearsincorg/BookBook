@@ -58,8 +58,13 @@ struct Subscription {
 // authors separated by ';' come back joined with " and ".
 std::string natural_author(const std::string& catalogue_name);
 
-// Sets the credentials and logs in (3-step handshake). On failure `error` is a short reason.
-esp_err_t login(const std::string& user, const std::string& password, std::string* error = nullptr);
+// Sets the credentials and logs in (3-step handshake). On failure `error` is a short reason. A rejected
+// login still starts the usual cool-off (see ensure_logged_in below), but `ignore_cooldown` skips checking
+// whether one is already running -- use it only for an explicit, human-initiated attempt (the setup page's
+// "Test library login"), so correcting a typo right after a failed one isn't blocked by it. Never pass it
+// for anything that runs unattended.
+esp_err_t login(const std::string& user, const std::string& password, std::string* error = nullptr,
+                bool ignore_cooldown = false);
 bool logged_in();
 // Logs in unless this user is already logged in. Waits for a login already in progress instead of starting a
 // second one. Nothing logs in at start-up: the first request that needs the library does it.

@@ -141,11 +141,13 @@ bool open_client() {
     return s_client != nullptr;
 }
 
-// One HTTP request with pacing, our own cookie jar, and a single reconnect retry.
+// One HTTP request with pacing, our own cookie jar, and a single reconnect retry. `ignore_cooldown` skips
+// the "cooling off after push-back" gate below (but a fresh push-back during this very call still sets one):
+// only for an explicit, human-initiated attempt, never anything that runs unattended.
 esp_err_t request(esp_http_client_method_t method, const std::string& path, const char* content_type,
-                  const std::string* body, const char* csrf, Response& out) {
+                  const std::string* body, const char* csrf, Response& out, bool ignore_cooldown = false) {
     for (int attempt = 0; attempt < 2; attempt++) {
-        if (esp_timer_get_time() < s_blocked_until_us) {
+        if (!ignore_cooldown && esp_timer_get_time() < s_blocked_until_us) {
             ESP_LOGW(TAG, "request %s skipped: cooling off after the library pushed back", path.c_str());
             return ESP_ERR_INVALID_STATE;
         }
@@ -196,10 +198,10 @@ esp_err_t request(esp_http_client_method_t method, const std::string& path, cons
 }
 
 // GET that follows up to 5 same-site redirects (needed for the login handshake's final step).
-esp_err_t get_following(const std::string& first_path, Response& out) {
+esp_err_t get_following(const std::string& first_path, Response& out, bool ignore_cooldown = false) {
     std::string path = first_path;
     for (int hop = 0; hop < 6; hop++) {
-        esp_err_t err = request(HTTP_METHOD_GET, path, nullptr, nullptr, nullptr, out);
+        esp_err_t err = request(HTTP_METHOD_GET, path, nullptr, nullptr, nullptr, out, ignore_cooldown);
         if (err != ESP_OK) return err;
         ESP_LOGI(TAG, "GET %s -> HTTP %d%s%s", path.c_str(), out.status, out.location.empty() ? "" : " -> ",
                  out.location.c_str());
@@ -354,7 +356,7 @@ esp_err_t ensure_logged_in(const std::string& user, const std::string& password,
 
 // Mirrors dodp_auth/js/login.js: GET the login page for a CSRF token, POST base64 credentials as
 // JSON with that token, then GET /dodp-auth/api/authorize to establish the real session.
-esp_err_t login(const std::string& user, const std::string& password, std::string* error) {
+esp_err_t login(const std::string& user, const std::string& password, std::string* error, bool ignore_cooldown) {
     Lock lock;
     s_user = user;
     s_password = password;
@@ -371,7 +373,7 @@ esp_err_t login(const std::string& user, const std::string& password, std::strin
     // session-expired notice instead of the real form, exactly like it does in a browser.
     auto fetch_csrf = [&](std::string* out) -> esp_err_t {
         Response page;
-        esp_err_t err = request(HTTP_METHOD_GET, "/library/login", nullptr, nullptr, nullptr, page);
+        esp_err_t err = request(HTTP_METHOD_GET, "/library/login", nullptr, nullptr, nullptr, page, ignore_cooldown);
         if (err != ESP_OK) return ESP_FAIL;  // request() already logged why
         if (page.status != 200) {
             ESP_LOGW(TAG, "login page: HTTP %d: %.200s", page.status, page.body.c_str());
@@ -410,7 +412,8 @@ esp_err_t login(const std::string& user, const std::string& password, std::strin
     cJSON_free(raw);
 
     Response auth;
-    esp_err_t err = request(HTTP_METHOD_POST, "/dodp-auth/api/authenticate", "application/json", &body, csrf.c_str(), auth);
+    esp_err_t err = request(HTTP_METHOD_POST, "/dodp-auth/api/authenticate", "application/json", &body, csrf.c_str(),
+                            auth, ignore_cooldown);
     if (err != ESP_OK) return fail("library login request failed", ESP_FAIL);  // request() already logged why
     if (auth.status != 200) {
         ESP_LOGW(TAG, "authenticate: HTTP %d: %.200s", auth.status, auth.body.c_str());
@@ -426,7 +429,7 @@ esp_err_t login(const std::string& user, const std::string& password, std::strin
     }
 
     Response authorize;
-    err = get_following("/dodp-auth/api/authorize", authorize);
+    err = get_following("/dodp-auth/api/authorize", authorize, ignore_cooldown);
     if (err != ESP_OK || authorize.status != 200) {
         ESP_LOGW(TAG, "authorize ended with err=%s HTTP %d: %.200s", esp_err_to_name(err), authorize.status,
                  authorize.body.c_str());

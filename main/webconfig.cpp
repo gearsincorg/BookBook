@@ -247,8 +247,10 @@ static esp_err_t h_test_va(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
     if (!wifi::connected()) return send_error(req, "409 Conflict", "Not on the internet yet: save Wi-Fi and restart first");
     Config c = config::get();
+    // A person is right here, actively testing what they just typed: don't let an old cool-off from a
+    // previous mistake block this attempt (a real rejection still starts a fresh one, below).
     std::string why;
-    if (va::login(c.va_user, c.va_password, &why) != ESP_OK) {
+    if (va::login(c.va_user, c.va_password, &why, /*ignore_cooldown=*/true) != ESP_OK) {
         return send_error(req, "401 Unauthorized", ("Library login failed: " + why).c_str());
     }
     va::Shelf shelf;
