@@ -133,6 +133,9 @@ static void run_pending_update(const Config& c) {
     leds::updating();  // flashing yellow while it downloads
     std::string why;
     ota::install(c, &why);  // does not return on success
+    // The failure is not in her conversation memory, which says the update started: forget it, or the next "update
+    // yourself" is answered from that memory ("it is already in progress") and nothing is tried.
+    brain::reset();
     say(c, "Sorry, the update did not work, so I am carrying on as I was.");
 }
 
