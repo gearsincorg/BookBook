@@ -372,13 +372,21 @@ esp_err_t login(const std::string& user, const std::string& password, std::strin
     auto fetch_csrf = [&](std::string* out) -> esp_err_t {
         Response page;
         esp_err_t err = request(HTTP_METHOD_GET, "/library/login", nullptr, nullptr, nullptr, page);
-        if (err != ESP_OK || page.status != 200) return ESP_FAIL;
+        if (err != ESP_OK) return ESP_FAIL;  // request() already logged why
+        if (page.status != 200) {
+            ESP_LOGW(TAG, "login page: HTTP %d: %.200s", page.status, page.body.c_str());
+            return ESP_FAIL;
+        }
         size_t at = page.body.find("csrf-token");
         size_t v = at == std::string::npos ? at : page.body.find("value=", at);
-        if (v == std::string::npos || v + 7 > page.body.size()) return ESP_ERR_NOT_FOUND;
-        char quote = page.body[v + 6];
-        size_t end = page.body.find(quote, v + 7);
-        if ((quote != '"' && quote != '\'') || end == std::string::npos) return ESP_ERR_NOT_FOUND;
+        bool found = v != std::string::npos && v + 7 <= page.body.size();
+        char quote = found ? page.body[v + 6] : 0;
+        size_t end = found ? page.body.find(quote, v + 7) : std::string::npos;
+        found = found && (quote == '"' || quote == '\'') && end != std::string::npos;
+        if (!found) {
+            ESP_LOGW(TAG, "login page had no CSRF token: %.200s", page.body.c_str());
+            return ESP_ERR_NOT_FOUND;
+        }
         *out = page.body.substr(v + 7, end - (v + 7));
         return ESP_OK;
     };
@@ -403,10 +411,15 @@ esp_err_t login(const std::string& user, const std::string& password, std::strin
 
     Response auth;
     esp_err_t err = request(HTTP_METHOD_POST, "/dodp-auth/api/authenticate", "application/json", &body, csrf.c_str(), auth);
-    if (err != ESP_OK || auth.status != 200) return fail("library login request failed", ESP_FAIL);
+    if (err != ESP_OK) return fail("library login request failed", ESP_FAIL);  // request() already logged why
+    if (auth.status != 200) {
+        ESP_LOGW(TAG, "authenticate: HTTP %d: %.200s", auth.status, auth.body.c_str());
+        return fail("library login request failed", ESP_FAIL);
+    }
     JsonPtr result(cJSON_ParseWithLength(auth.body.data(), auth.body.size()));
     std::string code = jstr(result.get(), "errorCode"), msg = jstr(result.get(), "errorMessage");
     if (!code.empty() || !msg.empty()) {
+        ESP_LOGW(TAG, "authenticate rejected: errorCode='%s' errorMessage='%s'", code.c_str(), msg.c_str());
         if (msg == "PasswordMustBeSet") return fail("password must be set on the website first", ESP_ERR_INVALID_STATE);
         back_off("login rejected");  // never hammer a wrong password: accounts can lock
         return fail("library rejected the login", ESP_ERR_INVALID_STATE);
@@ -415,7 +428,8 @@ esp_err_t login(const std::string& user, const std::string& password, std::strin
     Response authorize;
     err = get_following("/dodp-auth/api/authorize", authorize);
     if (err != ESP_OK || authorize.status != 200) {
-        ESP_LOGW(TAG, "authorize ended with err=%s HTTP %d", esp_err_to_name(err), authorize.status);
+        ESP_LOGW(TAG, "authorize ended with err=%s HTTP %d: %.200s", esp_err_to_name(err), authorize.status,
+                 authorize.body.c_str());
         return fail("library session was not established", ESP_FAIL);
     }
 
