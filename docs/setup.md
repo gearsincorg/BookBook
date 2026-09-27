@@ -34,6 +34,7 @@ fading 3-LED tail, and it always means the device is **waiting**.
 
 ## The button
 
+- **Volume by voice:** ask her to turn it up or down, or to set it to a number from 0 to 100 (the same scale as the setup page's slider). She changes it at once, says the new level, and remembers it.
 - **Touch and hold the pad** (XIAO stand-in: the touch pad on D5; the Waveshare board uses Key1): push-to-talk. Speak while holding (up to 30 s; if you go on longer she says "I'm sorry, but I can only listen up to 30 seconds at a time" and answers what she heard), release, and it answers. Press again while it is answering to stop it.
 - A touch shorter than 0.7 s is ignored.
 

@@ -1,5 +1,6 @@
 #include "brain.h"
 
+#include <cmath>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -12,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "sdkconfig.h"
+#include "audio.h"
 #include "memory.h"
 #include "ota.h"
 #include "setupnet.h"
@@ -168,9 +170,13 @@ const char kSystemPrompt[] =
     "plainly, for example 'I am running version 1.3.0.' If developmentBuild is true, say it is a test build "
     "based on that version. Give the build date only if they ask for it.\n"
     // == Setup mode ==
-    "32. If the member asks about setup mode, the setup network, the setup or admin page, or changing your "
-    "Wi-Fi settings, do not explain it at length: ask whether they would like you to create a wireless "
-    "access point for setup. Only when they clearly say yes in their next message, call start_setup_network. "
+    "32. If the member asks about setup mode, the setup network, the setup or admin page, changing your "
+    "Wi-Fi settings, or changing, resetting or updating a password or login, do not explain at length. For a "
+    "password or login, say in one short sentence that it is changed on the setup page: your library login and "
+    "Wi-Fi password are kept there, and changing them there only changes what you use to sign in for them, not "
+    "the password at the library itself. A password that cannot be changed there, such as the setup network's, "
+    "is set by whoever installed you. Then ask whether they would like you to create a wireless access point for "
+    "setup. Only when they clearly say yes in their next message, call start_setup_network. "
     "Then tell them the network's name, read out as the spokenName in the result, and that it stays open "
     "until ten minutes after they last use the setup page. Tell them to join that network on their phone or "
     "computer, open a web browser and go to the address in spokenAddress. If automatic is true it was already "
@@ -178,7 +184,13 @@ const char kSystemPrompt[] =
     "your Wi-Fi is down. Never say a password.\n"
     "33. If the member asks you to turn off, close or stop the setup network, setup mode or the access point, "
     "call stop_setup_network without asking first, and say in one short sentence that it is off. If it was "
-    "not open, say so.\n";
+    "not open, say so.\n"
+    // == Volume ==
+    "34. The member can set your speaker volume by voice, on a scale from 0 (the quietest useful level) to 100 "
+    "(the loudest). Call set_volume without asking first. For 'louder' or 'quieter' or 'turn it up or down' use "
+    "change (about 15; 10 for a bit, 30 for a lot); for a number, or a word such as half, maximum or minimum, "
+    "use level (half is 50, maximum or full is 100, minimum or quietest is 0). If they only ask what the volume "
+    "is, call it with nothing set. Then say the new level in a few words, for example 'Volume is now 60.'\n";
 
 const char kToolsJson[] = R"JSON([
  {"name":"search_library",
@@ -320,6 +332,9 @@ const char kToolsJson[] = R"JSON([
  {"name":"stop_setup_network",
   "description":"Turn the setup Wi-Fi network (the wireless access point for setup) off now. Only when the member asks you to turn off, close or stop setup mode.",
   "input_schema":{"type":"object","properties":{}}},
+ {"name":"set_volume",
+  "description":"Set your speaker volume, or report it. Give level (0 to 100, where 100 is loudest) for an exact setting, or change (-100 to 100) to go up or down from the current level; give neither to just read the current volume. Takes effect at once and is saved.",
+  "input_schema":{"type":"object","properties":{"level":{"type":"integer","description":"Exact volume, 0 to 100."},"change":{"type":"integer","description":"Amount to raise (positive) or lower (negative) the volume."}}}},
  {"name":"install_update",
   "description":"Install the published update to your own software. Only when the member has asked you to update. It starts after you have finished speaking, takes less than a minute, and restarts you.",
   "input_schema":{"type":"object","properties":{}}}
@@ -805,6 +820,35 @@ std::string tool_stop_setup_network() {
     return "{\"result\":\"closed\"}";
 }
 
+std::string tool_set_volume(cJSON* input, bool* is_error) {
+    const int now = audio::level_from_volume(config::get().volume);
+    int target = now;
+    bool set = false;
+    const cJSON* level = cJSON_GetObjectItemCaseSensitive(input, "level");
+    const cJSON* change = cJSON_GetObjectItemCaseSensitive(input, "change");
+    if (cJSON_IsNumber(level)) {
+        target = static_cast<int>(std::lround(level->valuedouble));
+        set = true;
+    } else if (cJSON_IsNumber(change)) {
+        target = now + static_cast<int>(std::lround(change->valuedouble));
+        set = true;
+    }
+    target = target < 0 ? 0 : (target > 100 ? 100 : target);
+    if (set && target != now) {
+        Config cfg = config::get();
+        cfg.volume = audio::volume_from_level(target);
+        if (config::save(cfg) != ESP_OK) {
+            *is_error = true;
+            return "Could not save the volume.";
+        }
+        audio::set_volume(cfg.volume);  // her next words are already at the new volume
+    }
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "volume", target);
+    cJSON_AddBoolToObject(o, "changed", set && target != now);
+    return print(o);
+}
+
 std::string tool_install_update(const Config& c, bool* is_error) {
     ota::Info info;
     esp_err_t err = ota::check(c, info);
@@ -1136,6 +1180,7 @@ std::string run_tool(const Config& c, const std::string& name, cJSON* input, boo
     if (name == "get_version") return tool_get_version();
     if (name == "start_setup_network") return tool_start_setup_network(is_error);
     if (name == "stop_setup_network") return tool_stop_setup_network();
+    if (name == "set_volume") return tool_set_volume(input, is_error);
     if (name == "subscribe_to_periodical") return tool_subscribe(c, input, is_error);
     if (name == "unsubscribe_from_periodical") return tool_unsubscribe(c, input, is_error);
     *is_error = true;

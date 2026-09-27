@@ -70,7 +70,7 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
   <fieldset>
     <legend>Sound</legend>
     <label for="volume">Speaker volume: <span id="volout">80</span>%</label>
-    <input id="volume" name="volume" type="range" min="1" max="100" step="1">
+    <input id="volume" name="volume" type="range" min="0" max="100" step="1">
     <button type="button" class="secondary" id="testspeak">Test speaker</button>
     <button type="button" class="secondary" id="testmic">Test microphone</button>
     <span class="hint">Speak a sentence after the beep (4 seconds). It plays back what it recorded, then says what it heard.</span>
@@ -83,6 +83,11 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
 
 <script>
 const $ = id => document.getElementById(id);
+// The slider runs 0-100, but anything quieter than 25 on the device's own volume scale is too quiet to be useful, so
+// slider 0 is device volume 25 and slider 100 is device volume 100 (the stored and transmitted value is the device's).
+const VOL_MIN = 25;
+const toDevice = s => Math.round(VOL_MIN + s * (100 - VOL_MIN) / 100);
+const toSlider = p => Math.round(Math.max(0, Math.min(100, (p - VOL_MIN) * 100 / (100 - VOL_MIN))));
 const say = (msg, cls) => { const s = $('status'); s.textContent = msg; s.className = cls || ''; };
 // The button that was just clicked shows it is working (dimmed, "…", disabled so it cannot be pressed twice)
 // until the request it started has finished.
@@ -106,7 +111,7 @@ function hint(id, has) { $(id).textContent = has ? '(saved; leave blank to keep)
 async function load() {
   const c = await api('/api/config');
   $('wifi_ssid').value = c.wifi_ssid; $('va_user').value = c.va_user;
-  $('volume').value = c.volume; $('volout').textContent = c.volume;
+  $('volume').value = toSlider(c.volume); $('volout').textContent = $('volume').value;
   hint('h_wifi_pass', c.has.wifi_password); hint('h_va_pass', c.has.va_password);
   $('info').textContent = 'Device ' + c.mac + (c.ip ? ' on your network at ' + c.ip : ' (not on your network yet)') +
     (c.ap ? '. Setup network: ' + c.ap : '') + '.';
@@ -137,7 +142,7 @@ $('scan').addEventListener('click', async () => {
 $('f').addEventListener('submit', async ev => {
   ev.preventDefault();
   const body = {};
-  for (const el of $('f').elements) if (el.name) body[el.name] = el.type === 'range' ? Number(el.value) : el.type === 'checkbox' ? el.checked : el.value;
+  for (const el of $('f').elements) if (el.name) body[el.name] = el.type === 'range' ? toDevice(Number(el.value)) : el.type === 'checkbox' ? el.checked : el.value;
   say('Saving…');
   try {
     const r = await api('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -149,7 +154,7 @@ $('f').addEventListener('submit', async ev => {
 
 $('testspeak').addEventListener('click', async () => {
   say('Playing test phrase…');
-  try { await api('/api/test/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume: Number($('volume').value) }) }); say('Test phrase played at ' + $('volume').value + '%. Press Save to keep this volume.', 'ok'); }
+  try { await api('/api/test/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume: toDevice(Number($('volume').value)) }) }); say('Test phrase played at ' + $('volume').value + '%. Press Save to keep this volume.', 'ok'); }
   catch (e) { say('Speaker test failed: ' + e.message, 'bad'); }
 });
 

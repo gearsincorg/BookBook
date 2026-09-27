@@ -5,7 +5,19 @@
 // Slider percent -> amplitude is squared so the slider feels even in loudness (80% = -3.9 dB, 50% = -12 dB).
 static volatile int s_volume = CONFIG_BOOKBOOK_SPEAKER_VOLUME;
 namespace audio {
-void set_volume(int percent) { s_volume = percent < 1 ? 1 : (percent > 100 ? 100 : percent); }
+// Nothing below kMinVolume is useful, so it is the floor (the setup page's slider spans kMinVolume-100).
+constexpr int kMinVolume = 25;
+void set_volume(int percent) { s_volume = percent < kMinVolume ? kMinVolume : (percent > 100 ? 100 : percent); }
+
+int volume_from_level(int level) {
+    level = level < 0 ? 0 : (level > 100 ? 100 : level);
+    return kMinVolume + (level * (100 - kMinVolume) + 50) / 100;
+}
+
+int level_from_volume(int volume) {
+    volume = volume < kMinVolume ? kMinVolume : (volume > 100 ? 100 : volume);
+    return ((volume - kMinVolume) * 100 + (100 - kMinVolume) / 2) / (100 - kMinVolume);
+}
 }
 
 #if CONFIG_BOOKBOOK_BOARD_XIAO_ESP32S3
