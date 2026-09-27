@@ -332,7 +332,7 @@ extern "C" void app_main() {
         }
         was_down = down;
         if (!down && s_update_led_dirty.exchange(false)) show_idle_state();
-        if (!image_confirmed && now_ms > 60000) {  // a freshly installed image has now run a minute: keep it
+        if (!image_confirmed && now_ms > 30000) {  // a freshly installed image has now run 30 s: keep it
             ota::mark_valid();  // once only: it reads flash, and doing that 100 times a second stalled the CPU during speech
             image_confirmed = true;
         }
