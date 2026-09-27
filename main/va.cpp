@@ -359,7 +359,6 @@ esp_err_t login(const std::string& user, const std::string& password, std::strin
     s_user = user;
     s_password = password;
     s_logged_in = false;
-    s_cookies.clear();
     auto fail = [&](const char* why, esp_err_t code) {
         if (error) *error = why;
         ESP_LOGW(TAG, "login failed: %s", why);
@@ -367,17 +366,33 @@ esp_err_t login(const std::string& user, const std::string& password, std::strin
     };
     if (user.empty() || password.empty()) return fail("no library login saved", ESP_ERR_INVALID_ARG);
 
-    Response page;
-    esp_err_t err = request(HTTP_METHOD_GET, "/library/login", nullptr, nullptr, nullptr, page);
-    if (err != ESP_OK || page.status != 200) return fail("could not reach the library website", ESP_FAIL);
+    // Fetches /library/login and pulls out its CSRF token. Returns ESP_ERR_NOT_FOUND if the page had
+    // none, which is what a leftover cookie from an earlier (now-expired) session gets us: a
+    // session-expired notice instead of the real form, exactly like it does in a browser.
+    auto fetch_csrf = [&](std::string* out) -> esp_err_t {
+        Response page;
+        esp_err_t err = request(HTTP_METHOD_GET, "/library/login", nullptr, nullptr, nullptr, page);
+        if (err != ESP_OK || page.status != 200) return ESP_FAIL;
+        size_t at = page.body.find("csrf-token");
+        size_t v = at == std::string::npos ? at : page.body.find("value=", at);
+        if (v == std::string::npos || v + 7 > page.body.size()) return ESP_ERR_NOT_FOUND;
+        char quote = page.body[v + 6];
+        size_t end = page.body.find(quote, v + 7);
+        if ((quote != '"' && quote != '\'') || end == std::string::npos) return ESP_ERR_NOT_FOUND;
+        *out = page.body.substr(v + 7, end - (v + 7));
+        return ESP_OK;
+    };
 
-    size_t at = page.body.find("csrf-token");
-    size_t v = at == std::string::npos ? at : page.body.find("value=", at);
-    if (v == std::string::npos || v + 7 > page.body.size()) return fail("no CSRF token on login page", ESP_FAIL);
-    char quote = page.body[v + 6];
-    size_t end = page.body.find(quote, v + 7);
-    if ((quote != '"' && quote != '\'') || end == std::string::npos) return fail("no CSRF token on login page", ESP_FAIL);
-    std::string csrf = page.body.substr(v + 7, end - (v + 7));
+    std::string csrf;
+    esp_err_t csrf_err = ESP_FAIL;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        s_cookies.clear();  // never carry a stale cookie into the login page
+        csrf_err = fetch_csrf(&csrf);
+        if (csrf_err != ESP_ERR_NOT_FOUND) break;
+        ESP_LOGW(TAG, "login page had no CSRF token (session-expired bounce?); retrying once, like a browser refresh");
+    }
+    if (csrf_err == ESP_ERR_NOT_FOUND) return fail("no CSRF token on login page", ESP_FAIL);
+    if (csrf_err != ESP_OK) return fail("could not reach the library website", ESP_FAIL);
 
     JsonPtr payload(cJSON_CreateObject());
     cJSON_AddStringToObject(payload.get(), "email", base64(user).c_str());
@@ -387,7 +402,7 @@ esp_err_t login(const std::string& user, const std::string& password, std::strin
     cJSON_free(raw);
 
     Response auth;
-    err = request(HTTP_METHOD_POST, "/dodp-auth/api/authenticate", "application/json", &body, csrf.c_str(), auth);
+    esp_err_t err = request(HTTP_METHOD_POST, "/dodp-auth/api/authenticate", "application/json", &body, csrf.c_str(), auth);
     if (err != ESP_OK || auth.status != 200) return fail("library login request failed", ESP_FAIL);
     JsonPtr result(cJSON_ParseWithLength(auth.body.data(), auth.body.size()));
     std::string code = jstr(result.get(), "errorCode"), msg = jstr(result.get(), "errorMessage");
