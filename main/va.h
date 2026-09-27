@@ -61,8 +61,8 @@ std::string natural_author(const std::string& catalogue_name);
 // Sets the credentials and logs in (3-step handshake). On failure `error` is a short reason.
 esp_err_t login(const std::string& user, const std::string& password, std::string* error = nullptr);
 bool logged_in();
-// Logs in unless this user is already logged in. Waits for a login already in progress (for example the
-// start-up warm-up) instead of starting a second one.
+// Logs in unless this user is already logged in. Waits for a login already in progress instead of starting a
+// second one. Nothing logs in at start-up: the first request that needs the library does it.
 esp_err_t ensure_logged_in(const std::string& user, const std::string& password, std::string* error = nullptr);
 
 // `type` is the portal's own dropdown value: "Book", "Picture Book", "Magazine", ...

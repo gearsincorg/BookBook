@@ -25,7 +25,7 @@ namespace {
 constexpr const char* kBase = "https://my.visionaustralia.org";
 constexpr const char* kUserAgent = "BookBook/0.1 (personal accessibility assistant; contact via VA account)";
 constexpr size_t kMaxBody = 400 * 1024;
-constexpr int64_t kMinGapUs = 300 * 1000;  // polite pacing between calls
+constexpr int64_t kMinGapUs = 1000 * 1000;  // polite pacing between calls
 
 struct Response {
     int status = 0;
@@ -41,6 +41,29 @@ std::string s_user, s_password;
 bool s_logged_in;
 int64_t s_last_call_us;
 bool s_xhr;  // send X-Requested-With: XMLHttpRequest (what the site's own AJAX calls send)
+
+// Cool-off after the site pushes back (captcha, 403/429, a rejected login). While it lasts no request leaves the
+// unit, so retries and re-logins cannot deepen the block. Kept in RAM: a reboot clears it.
+int64_t s_blocked_until_us;
+int s_strikes;
+
+void back_off(const char* why) {
+    static const int kMinutes[] = {15, 60, 240};
+    int minutes = kMinutes[s_strikes < 3 ? s_strikes : 2];
+    if (s_strikes < 3) s_strikes++;
+    s_blocked_until_us = esp_timer_get_time() + static_cast<int64_t>(minutes) * 60 * 1000 * 1000;
+    s_logged_in = false;
+    ESP_LOGW(TAG, "library pushed back (%s): no requests for %d minutes", why, minutes);
+}
+
+bool contains_nocase(const std::string& hay, const char* needle) {
+    size_t n = strlen(needle);
+    if (hay.size() < n) return false;
+    for (size_t i = 0; i + n <= hay.size(); i++) {
+        if (strncasecmp(hay.c_str() + i, needle, n) == 0) return true;
+    }
+    return false;
+}
 
 struct Lock {
     static SemaphoreHandle_t handle() {
@@ -122,6 +145,10 @@ bool open_client() {
 esp_err_t request(esp_http_client_method_t method, const std::string& path, const char* content_type,
                   const std::string* body, const char* csrf, Response& out) {
     for (int attempt = 0; attempt < 2; attempt++) {
+        if (esp_timer_get_time() < s_blocked_until_us) {
+            ESP_LOGW(TAG, "request %s skipped: cooling off after the library pushed back", path.c_str());
+            return ESP_ERR_INVALID_STATE;
+        }
         int64_t wait_us = s_last_call_us + kMinGapUs - esp_timer_get_time();
         if (wait_us > 0) vTaskDelay(pdMS_TO_TICKS((wait_us + 999) / 1000));
 
@@ -152,6 +179,13 @@ esp_err_t request(esp_http_client_method_t method, const std::string& path, cons
             out.status = esp_http_client_get_status_code(s_client);
             ESP_LOGI(TAG, "%s %s: HTTP %d, %u bytes, %d ms", method == HTTP_METHOD_POST ? "POST" : "GET", path.substr(0, 48).c_str(),
                      out.status, static_cast<unsigned>(out.body.size()), static_cast<int>((s_last_call_us - t_start) / 1000));
+            // The login page may legitimately mention a captcha script; on any other page that is not JSON it is a challenge.
+            bool challenge = out.content_type.find("json") == std::string::npos && path != "/library/login" &&
+                             contains_nocase(out.body, "captcha");
+            if (out.status == 403 || out.status == 429 || challenge) {
+                back_off(out.status == 403 || out.status == 429 ? "HTTP 403/429" : "captcha");
+                return ESP_ERR_INVALID_STATE;
+            }
             return out.truncated ? ESP_ERR_NO_MEM : ESP_OK;
         }
         ESP_LOGW(TAG, "request %s failed: %s%s", path.c_str(), esp_err_to_name(err),
@@ -359,6 +393,7 @@ esp_err_t login(const std::string& user, const std::string& password, std::strin
     std::string code = jstr(result.get(), "errorCode"), msg = jstr(result.get(), "errorMessage");
     if (!code.empty() || !msg.empty()) {
         if (msg == "PasswordMustBeSet") return fail("password must be set on the website first", ESP_ERR_INVALID_STATE);
+        back_off("login rejected");  // never hammer a wrong password: accounts can lock
         return fail("library rejected the login", ESP_ERR_INVALID_STATE);
     }
 
@@ -370,6 +405,7 @@ esp_err_t login(const std::string& user, const std::string& password, std::strin
     }
 
     s_logged_in = true;
+    s_strikes = 0;
     ESP_LOGI(TAG, "logged in");
     return ESP_OK;
 }

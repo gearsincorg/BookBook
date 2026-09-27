@@ -201,7 +201,7 @@ static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm, bool cu
 }
 
 // Start-up preparation that only speeds up the first request, so it must not keep the member waiting: read
-// the shared memory file, and sign in to the library. Runs in the background after the greeting.
+// the shared memory file, and check for a firmware update. Runs in the background after the greeting.
 static void warmup_task(void* arg) {
     const Config& cfg = *static_cast<const Config*>(arg);
     int64_t t0 = esp_timer_get_time();
@@ -211,11 +211,7 @@ static void warmup_task(void* arg) {
         ESP_LOGI(TAG, "memory: %s (%d preferences, %d authors, %d genres, %d books read, %d on hold)", esp_err_to_name(m),
                  n.preferences, n.authors, n.genres, n.history, n.standby);
     }
-    if (!cfg.va_user.empty()) {
-        std::string why;
-        ESP_LOGI(TAG, "library sign-in at startup: %s",
-                 esp_err_to_name(va::ensure_logged_in(cfg.va_user, cfg.va_password, &why)));
-    }
+    // No library sign-in here: it happens on the first request that needs it, so reboots never touch the site.
     // Last, so it does not compete with the connections above. Silent: only the ready light shows the result.
     {
         ota::Info update;  // scoped: vTaskDelete below never returns, so it would not be destroyed
@@ -282,7 +278,7 @@ extern "C" void app_main() {
             leds::speaking();  // low red while the intro is spoken, like any spoken answer
             azure::speak(cfg.azure_region.c_str(), cfg.azure_key.c_str(), intro.c_str());
         }
-        // Memory and library sign-in prepare the first request; they run in the background so the LEDs go
+        // Memory loading prepares the first request; it runs in the background so the LEDs go
         // green (ready for press-to-talk) as soon as the greeting has finished.
         xTaskCreate(warmup_task, "warmup", 12288, &cfg, 4, nullptr);
     }
