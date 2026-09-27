@@ -55,7 +55,7 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
     <label for="wifi_ssid">Network name (SSID) <span class="hint">(type it here if it is hidden)</span></label>
     <input id="wifi_ssid" name="wifi_ssid" maxlength="32" autocapitalize="off" spellcheck="false">
     <label for="wifi_password">Wi-Fi password <span class="hint" id="h_wifi_pass"></span></label>
-    <input id="wifi_password" name="wifi_password" type="password" maxlength="63" autocomplete="new-password">
+    <input id="wifi_password" name="wifi_password" maxlength="63" autocapitalize="off" spellcheck="false" autocomplete="new-password">
   </fieldset>
 
   <fieldset>
@@ -63,7 +63,7 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
     <label for="va_user">Email or VA ID</label>
     <input id="va_user" name="va_user" maxlength="80" autocapitalize="off" spellcheck="false">
     <label for="va_password">Library password <span class="hint" id="h_va_pass"></span></label>
-    <input id="va_password" name="va_password" type="password" maxlength="80" autocomplete="new-password">
+    <input id="va_password" name="va_password" maxlength="80" autocapitalize="off" spellcheck="false" autocomplete="new-password">
     <button type="button" class="secondary" id="testva">Test library login</button>
   </fieldset>
 
