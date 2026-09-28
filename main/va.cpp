@@ -25,7 +25,7 @@ namespace {
 constexpr const char* kBase = "https://my.visionaustralia.org";
 constexpr const char* kUserAgent = "BookBook/0.1 (personal accessibility assistant; contact via VA account)";
 constexpr size_t kMaxBody = 400 * 1024;
-constexpr int64_t kMinGapUs = 1000 * 1000;  // polite pacing between calls
+constexpr int64_t kMinGapUs = 500 * 1000;  // polite pacing between calls
 
 struct Response {
     int status = 0;
