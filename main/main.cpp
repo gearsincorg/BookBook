@@ -61,10 +61,10 @@ static bool key_cancel() {
 static void say(const Config& c, const std::string& text) {
     thinking::stop();  // the real answer is ready: waiting sounds end immediately
     if (c.azure_key.empty()) return;
-    leds::speaking();  // low red while it is spoken
     s_cancel_armed = !board::key_pressed(board::Key::Key1);
     ESP_LOGI(TAG, "say: %s", text.c_str());
-    azure::speak(c.azure_region.c_str(), c.azure_key.c_str(), text.c_str(), key_cancel);
+    // Low red only once sound is actually coming; until then the light keeps showing what it was doing.
+    azure::speak(c.azure_region.c_str(), c.azure_key.c_str(), text.c_str(), key_cancel, leds::speaking);
 }
 
 // One push-to-talk turn. The slow part (speech-to-text, then the librarian) runs on its own task so the main
@@ -275,8 +275,8 @@ extern "C" void app_main() {
                 break;
         }
         if (!cfg.azure_key.empty()) {
-            leds::speaking();  // low red while the intro is spoken, like any spoken answer
-            azure::speak(cfg.azure_region.c_str(), cfg.azure_key.c_str(), intro.c_str());
+            // low red once the intro is audible, like any spoken answer
+            azure::speak(cfg.azure_region.c_str(), cfg.azure_key.c_str(), intro.c_str(), nullptr, leds::speaking);
         }
         // Memory loading prepares the first request; it runs in the background so the LEDs go
         // green (ready for press-to-talk) as soon as the greeting has finished.

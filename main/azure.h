@@ -19,5 +19,8 @@ esp_err_t transcribe(const char* region, const char* key, const int16_t* pcm, si
                      const std::atomic<bool>* cancel = nullptr);
 
 // `cancel`, if given, is polled between audio chunks; returning true stops playback early.
-esp_err_t speak(const char* region, const char* key, const char* text, bool (*cancel)() = nullptr);
+// `on_start`, if given, is called once from the player task the moment the speaker is switched on, after the
+// connection, synthesis and pre-buffering delay, so a light can show "speaking" only when sound is actually coming.
+esp_err_t speak(const char* region, const char* key, const char* text, bool (*cancel)() = nullptr,
+                void (*on_start)() = nullptr);
 }

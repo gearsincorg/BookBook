@@ -90,6 +90,7 @@ struct TtsPlayback {
     std::atomic<bool> done{false};    // the download has ended
     std::atomic<bool> stop{false};    // cancelled: drop what is left
     std::atomic<bool> failed{false};
+    void (*on_start)() = nullptr;     // called once the speaker is on
     int underruns = 0;
 };
 
@@ -102,6 +103,7 @@ static void tts_player_task(void* arg) {
             p->failed = true;
             p->stop = true;
         } else {
+            if (p->on_start) p->on_start();
             uint8_t chunk[2048];
             while (!p->stop) {
                 size_t n = xStreamBufferReceive(p->buffer, chunk, sizeof(chunk), pdMS_TO_TICKS(100));
@@ -123,7 +125,7 @@ static void tts_player_task(void* arg) {
     vTaskDelete(nullptr);
 }
 
-esp_err_t speak(const char* region, const char* key, const char* text, bool (*cancel)()) {
+esp_err_t speak(const char* region, const char* key, const char* text, bool (*cancel)(), void (*on_start)()) {
     constexpr const char* kVoice = "en-AU-NatashaNeural";
     std::string ssml = "<speak version='1.0' xml:lang='en-AU'><voice name='";
     ssml += kVoice;
@@ -168,6 +170,7 @@ esp_err_t speak(const char* region, const char* key, const char* text, bool (*ca
     // Download and playback are decoupled by a large buffer in PSRAM (12 s of audio). Playing straight from
     // the network left only the 240 ms I2S cushion, so any network stall in a long reply became a gap.
     TtsPlayback play;
+    play.on_start = on_start;
     play.buffer = xStreamBufferCreateWithCaps(kTtsBufferBytes, 1, MALLOC_CAP_SPIRAM);
     if (!play.buffer) {
         ESP_LOGE(TAG, "tts: no memory for the audio buffer");
