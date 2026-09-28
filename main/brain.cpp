@@ -17,13 +17,14 @@
 #include "memory.h"
 #include "ota.h"
 #include "setupnet.h"
+#include "util.h"
 #include "va.h"
 
 static const char* TAG = "brain";
 
 namespace {
 
-constexpr int kMaxToolRoundTrips = 8;  // then one last round, without tools, to say what was done
+constexpr int kMaxToolRoundTrips = 8;                  // then one last round, without tools, to say what was done
 constexpr int kMaxMessages = 40;                       // history cap (trimmed at turn boundaries)
 constexpr int64_t kIdleResetUs = 10LL * 60 * 1000000;  // forget the conversation after 10 idle minutes
 constexpr size_t kMaxResponseBytes = 96 * 1024;
@@ -344,19 +345,11 @@ const char kToolsJson[] = R"JSON([
 
 // ---- state -------------------------------------------------------------------------------------
 
-struct Lock {
-    static SemaphoreHandle_t handle() {
-        static SemaphoreHandle_t h = xSemaphoreCreateRecursiveMutex();
-        return h;
-    }
-    Lock() { xSemaphoreTakeRecursive(handle(), portMAX_DELAY); }
-    ~Lock() { xSemaphoreGiveRecursive(handle()); }
-};
+struct LockTag {};
+using Lock = util::ModuleLock<LockTag>;
 
-struct JsonDeleter {
-    void operator()(cJSON* p) const { cJSON_Delete(p); }
-};
-using JsonPtr = std::unique_ptr<cJSON, JsonDeleter>;
+using util::JsonPtr;
+using util::print;
 
 cJSON* s_messages;            // conversation so far (array of {role, content})
 cJSON* s_tools;               // parsed once
@@ -421,14 +414,6 @@ esp_err_t call_claude(const Config& c, const std::string& body, Response& out) {
 }
 
 // ---- tools -------------------------------------------------------------------------------------
-
-std::string print(cJSON* j) {
-    char* s = cJSON_PrintUnformatted(j);
-    std::string out = s ? s : "";
-    cJSON_free(s);
-    cJSON_Delete(j);
-    return out;
-}
 
 esp_err_t ensure_login(const Config& c) {
     std::string why;
@@ -561,14 +546,13 @@ std::string tool_request_list(const Config& c, bool* is_error) {
     return print(o);
 }
 
-std::string tool_profile(const Config& c, bool* is_error) {
+std::string tool_profile(const Config& c) {
     va::Shelf shelf;  // if the library cannot be reached the profile is built from the books list alone
     if (ensure_login(c) != ESP_OK || va::bookshelf(shelf) != ESP_OK) {
         ESP_LOGW(TAG, "profile: bookshelf unavailable, using the books list only");
         shelf = va::Shelf();
     }
     if (memory::configured(c)) memory::refresh(c);  // loads on first use, then only when changed elsewhere
-    (void)is_error;
     return memory::reading_profile(shelf);
 }
 
@@ -1169,7 +1153,7 @@ std::string run_tool(const Config& c, const std::string& name, cJSON* input, boo
         name == "get_preferred_genres" || name == "add_preferred_genre" || name == "remove_preferred_author") {
         return memory_tool(c, name, input, is_error);
     }
-    if (name == "get_reading_profile") return tool_profile(c, is_error);
+    if (name == "get_reading_profile") return tool_profile(c);
     if (name == "add_to_bookshelf") return tool_add_bookshelf(c, input, is_error);
     if (name == "remove_from_bookshelf") return tool_remove_bookshelf(c, input, is_error);
     if (name == "add_to_request_list") return tool_add_request_list(c, input, is_error);
@@ -1239,7 +1223,7 @@ esp_err_t respond(const Config& c, const std::string& user_text, std::string& re
     static const char kSorry[] = "Sorry, I ran into a problem. Could you try that again?";
     reply = kSorry;
     if (c.anthropic_key.empty()) {
-        reply = "I need an Anthropic key before I can answer. Please add one on the setup page.";
+        reply = "I need an Anthropic key before I can answer. It has to be built into my software.";
         return ESP_ERR_INVALID_STATE;
     }
     init_once();
@@ -1306,7 +1290,7 @@ esp_err_t respond(const Config& c, const std::string& user_text, std::string& re
                 return ESP_FAIL;
             }
             rollback_to(checkpoint);
-            if (resp.status == 401) reply = "My Anthropic key was rejected. Please check it on the setup page.";
+            if (resp.status == 401) reply = "My Anthropic key was rejected. It has to be corrected in my software.";
             return ESP_FAIL;
         }
         JsonPtr parsed(cJSON_ParseWithLength(resp.body.data(), resp.body.size()));

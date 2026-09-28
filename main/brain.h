@@ -6,13 +6,13 @@
 
 // The librarian's brain: a Claude conversation with library tools, modelled on Bookworm's
 // LibrarianOrchestrator (turn loop: user text -> Claude -> run any tool calls -> feed results back ->
-// repeat, capped at 5 round trips) and its persona rules.
+// repeat, up to 8 rounds of tool calls and then one last round without tools) and its persona rules.
 //
-// Tools: search_library, get_bookshelf, get_request_list, get_reading_profile, add_to_on_hold,
-// get_on_hold_list, remove_from_on_hold, add_to_bookshelf, remove_from_bookshelf,
-// add_to_request_list. Changes honour Config::dry_run (practice mode) and are verified by re-reading the
-// shelf. Memory tools (preferences, favourite authors and genres, reading history and ratings) read and
-// write the shared memory file (see memory.h).
+// Tools (kToolsJson in brain.cpp): library (search, bookshelf, request list, subscriptions), memory
+// (preferences, authors, genres, books list and ratings, the On Hold list, reading profile), and the device
+// itself (updates, version, setup network, volume). Library changes honour Config::dry_run (practice mode) and
+// are verified by re-reading the shelf or list. Memory tools read and write the shared memory file (see
+// memory.h). The persona rules are documented in docs/conversation-rules.md.
 namespace brain {
 
 // Answers one spoken request. `reply` is always set to something speakable, even on failure (a short

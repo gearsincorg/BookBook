@@ -262,41 +262,8 @@ static esp_err_t h_test_va(httpd_req_t* req) {
     return send_json(req, o);
 }
 
-// Bring-up test for the microphone chain: beep, record 4 s, play it back (so you can judge level
-// and clarity by ear), transcribe it with Azure, and say what was heard.
-// Diagnostic: records `ms` milliseconds (default 4000, at most 10000) and returns them as a WAV file, exactly as the
-// microphone delivered them, or after the normal processing with processed=1. No beep, no playback: it is for looking
-// at the signal (for example for a repeating click) on a PC.  POST /api/test/mic-wav?ms=8000&processed=0
-static esp_err_t h_test_mic_wav(httpd_req_t* req) {
-    if (!authorized(req)) return ESP_OK;
-    char query[64] = {};
-    httpd_req_get_url_query_str(req, query, sizeof(query));
-    char val[16];
-    int ms = 4000;
-    if (httpd_query_key_value(query, "ms", val, sizeof(val)) == ESP_OK) ms = atoi(val);
-    ms = ms < 500 ? 500 : (ms > 10000 ? 10000 : ms);
-    bool processed = false;
-    if (httpd_query_key_value(query, "processed", val, sizeof(val)) == ESP_OK) processed = atoi(val) != 0;
-
-    std::vector<int16_t> pcm;
-    mic::Stats stats;
-    if (mic::record(pcm, ms, &stats, processed) != ESP_OK) {
-        return send_error(req, "503 Service Unavailable", "Microphone not available");
-    }
-    const uint32_t data_bytes = static_cast<uint32_t>(pcm.size() * sizeof(int16_t));
-    uint8_t hdr[44] = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 16, 0, 'd', 'a', 't', 'a', 0, 0, 0, 0};
-    const uint32_t riff = 36 + data_bytes, rate = mic::kSampleRateHz, byte_rate = rate * 2;
-    memcpy(hdr + 4, &riff, 4);
-    memcpy(hdr + 24, &rate, 4);
-    memcpy(hdr + 28, &byte_rate, 4);
-    memcpy(hdr + 40, &data_bytes, 4);
-    httpd_resp_set_type(req, "audio/wav");
-    httpd_resp_send_chunk(req, reinterpret_cast<const char*>(hdr), sizeof(hdr));
-    httpd_resp_send_chunk(req, reinterpret_cast<const char*>(pcm.data()), data_bytes);
-    return httpd_resp_send_chunk(req, nullptr, 0);
-}
-
+// Microphone test: beep, record 4 s, play it back (so you can judge level and clarity by ear), transcribe it with
+// Azure, and say what was heard.
 static esp_err_t h_test_mic(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
     if (!wifi::connected()) return send_error(req, "409 Conflict", "Not on the internet yet: save Wi-Fi and restart first");
@@ -330,12 +297,6 @@ static esp_err_t h_test_mic(httpd_req_t* req) {
     cJSON_AddStringToObject(o, "status", status.c_str());
     cJSON_AddNumberToObject(o, "rms", stats.rms);
     cJSON_AddNumberToObject(o, "peak", stats.peak);
-    cJSON_AddNumberToObject(o, "gain", stats.gain);
-    cJSON_AddNumberToObject(o, "raw_rms", stats.raw_rms);
-    cJSON_AddNumberToObject(o, "raw_peak", stats.raw_peak);
-    cJSON_AddNumberToObject(o, "raw_peak_ms", stats.raw_peak_ms);
-    cJSON_AddNumberToObject(o, "process_ms", stats.process_ms);
-    cJSON_AddNumberToObject(o, "near_peak_pct", stats.near_peak_pct);
     return send_json(req, o);
 }
 
@@ -411,8 +372,6 @@ static void dns_task(void*) {
 
 namespace webconfig {
 
-void set_trust_setup_ap(bool trust) { s_trust_ap = trust; }
-
 void start_captive_dns() {
     if (s_dns_running) return;
     s_dns_running = true;
@@ -454,7 +413,6 @@ esp_err_t start(bool trust_setup_ap) {
         {"/api/test/speak", HTTP_POST, h_test_speak, nullptr},
         {"/api/test/va", HTTP_POST, h_test_va, nullptr},
         {"/api/test/mic", HTTP_POST, h_test_mic, nullptr},
-        {"/api/test/mic-wav", HTTP_POST, h_test_mic_wav, nullptr},
         {"/api/reboot", HTTP_POST, h_reboot, nullptr},
         {"/*", HTTP_GET, h_redirect, nullptr},  // last: captive-portal probes and unknown paths
     };

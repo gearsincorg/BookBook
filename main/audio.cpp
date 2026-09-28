@@ -1,10 +1,19 @@
 #include "audio.h"
 
+#include "driver/gpio.h"
+#include "driver/i2s_std.h"
+#include "esp_check.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "sdkconfig.h"
+
+static const char* TAG = "audio";
 
 // Slider percent -> amplitude is squared so the slider feels even in loudness (80% = -3.9 dB, 50% = -12 dB).
 static volatile int s_volume = CONFIG_BOOKBOOK_SPEAKER_VOLUME;
+
 namespace audio {
+
 // Nothing below kMinVolume is useful, so it is the floor (the setup page's slider spans kMinVolume-100).
 constexpr int kMinVolume = 25;
 void set_volume(int percent) { s_volume = percent < kMinVolume ? kMinVolume : (percent > 100 ? 100 : percent); }
@@ -18,19 +27,6 @@ int level_from_volume(int volume) {
     volume = volume < kMinVolume ? kMinVolume : (volume > 100 ? 100 : volume);
     return ((volume - kMinVolume) * 100 + (100 - kMinVolume) / 2) / (100 - kMinVolume);
 }
-}
-
-#if CONFIG_BOOKBOOK_BOARD_XIAO_ESP32S3
-
-#include "driver/gpio.h"
-#include "driver/i2s_std.h"
-#include "esp_check.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-
-static const char* TAG = "audio";
-
-namespace audio {
 
 static i2s_chan_handle_t s_tx;
 // DMA ring: 8 descriptors x 480 frames x 2 bytes (see init()); one extra descriptor for margin.
@@ -103,14 +99,3 @@ void end() {
 }
 
 }  // namespace audio
-
-#else  // Waveshare: codec-based output not implemented yet
-
-namespace audio {
-esp_err_t init() { return ESP_ERR_NOT_SUPPORTED; }
-esp_err_t begin() { return ESP_ERR_NOT_SUPPORTED; }
-esp_err_t write(const uint8_t*, size_t) { return ESP_ERR_NOT_SUPPORTED; }
-void end() {}
-}  // namespace audio
-
-#endif

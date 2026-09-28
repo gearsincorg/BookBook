@@ -17,6 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "util.h"
 #include "va.h"
 
 static const char* TAG = "memory";
@@ -25,14 +26,10 @@ namespace {
 
 constexpr size_t kMaxBody = 512 * 1024;
 
-struct Lock {
-    static SemaphoreHandle_t handle() {
-        static SemaphoreHandle_t h = xSemaphoreCreateRecursiveMutex();
-        return h;
-    }
-    Lock() { xSemaphoreTakeRecursive(handle(), portMAX_DELAY); }
-    ~Lock() { xSemaphoreGiveRecursive(handle()); }
-};
+struct LockTag {};
+using Lock = util::ModuleLock<LockTag>;
+using util::print;
+using util::blob_url;
 
 cJSON* s_doc;        // the memory document (owned)
 std::string s_etag;  // ETag of the version we last read or wrote (with quotes, as Azure sends it)
@@ -150,14 +147,6 @@ std::string now_iso() {
     return buf;
 }
 
-std::string print(cJSON* j, bool take = true) {
-    char* s = cJSON_PrintUnformatted(j);
-    std::string out = s ? s : "";
-    cJSON_free(s);
-    if (take) cJSON_Delete(j);
-    return out;
-}
-
 esp_err_t load_locked(const Config& c) {
     if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
     Response r;
@@ -234,20 +223,11 @@ esp_err_t update(const Config& c, const std::function<void()>& mutate) {
     return save_doc(c.memory_url, s_doc, s_etag, [&] { return load_locked(c); }, mutate, "memory");
 }
 
-// ---- standby list: its own blob (see memory.h) --------------------------------------------------
+// ---- On Hold list ("standby"): its own blob (see memory.h) --------------------------------------------------
 
 cJSON* s_standby;  // {"Books":[...]} (owned)
 std::string s_standby_etag;
 bool s_standby_loaded;
-
-// The memory URL points at .../memory.json?<sas>; the same container token reaches its other blobs.
-std::string blob_url(const std::string& base, const char* blob) {
-    size_t q = base.find('?');
-    std::string path = base.substr(0, q);
-    std::string query = q == std::string::npos ? "" : base.substr(q);
-    size_t slash = path.rfind('/');
-    return path.substr(0, slash + 1) + blob + query;
-}
 
 cJSON* standby_books() {
     if (!s_standby) s_standby = cJSON_CreateObject();
@@ -339,7 +319,7 @@ namespace memory {
 bool configured(const Config& c) { return !c.memory_url.empty(); }
 
 // Replace `doc` with a fresh copy of `url` if it changed (conditional read). Returns ESP_OK if unchanged or updated.
-static esp_err_t refresh_blob(const std::string& url, std::string& etag, cJSON*& doc, bool make_root_if_missing) {
+static esp_err_t refresh_blob(const std::string& url, std::string& etag, cJSON*& doc) {
     Response r;
     esp_err_t err = http_get(url, r, etag);
     if (err != ESP_OK) return err;
@@ -357,7 +337,6 @@ static esp_err_t refresh_blob(const std::string& url, std::string& etag, cJSON*&
         return ESP_OK;
     }
     if (r.status == 404) return ESP_OK;  // deleted elsewhere: keep what we have
-    (void)make_root_if_missing;
     return ESP_FAIL;
 }
 
@@ -366,8 +345,8 @@ esp_err_t refresh(const Config& c) {
     if (c.memory_url.empty()) return ESP_ERR_INVALID_STATE;
     if (s_loaded && s_standby_loaded && esp_timer_get_time() - s_last_sync_us < 20LL * 1000 * 1000) return ESP_OK;
     esp_err_t result = ESP_OK;
-    esp_err_t e1 = s_loaded ? refresh_blob(c.memory_url, s_etag, s_doc, false) : load_locked(c);
-    esp_err_t e2 = s_standby_loaded ? refresh_blob(blob_url(c.memory_url, "standby.json"), s_standby_etag, s_standby, false)
+    esp_err_t e1 = s_loaded ? refresh_blob(c.memory_url, s_etag, s_doc) : load_locked(c);
+    esp_err_t e2 = s_standby_loaded ? refresh_blob(blob_url(c.memory_url, "standby.json"), s_standby_etag, s_standby)
                                     : standby_load_locked(c);
     if (e1 != ESP_OK) result = e1;
     else if (e2 != ESP_OK) result = e2;
@@ -418,7 +397,7 @@ std::string prompt_snapshot() {
         cJSON_AddItemToArray(authors, x);
     }
     cJSON_AddItemToObject(o, "preferredGenres", cJSON_Duplicate(arr("PreferredGenres"), true));
-    if (s_standby_loaded) {  // the member's save-for-later list (titles only; get_standby_list has the detail)
+    if (s_standby_loaded) {  // the member's On Hold list (titles only; get_on_hold_list has the detail)
         cJSON* sb = cJSON_AddArrayToObject(o, "onHoldList");
         const cJSON* s;
         int shown = 0;
@@ -728,14 +707,6 @@ esp_err_t standby_add_many(const Config& c, const std::vector<StandbyEntry>& ent
     });
     if (created) *created = made;
     if (updated) *updated = changed;
-    return err;
-}
-
-esp_err_t standby_add(const Config& c, const std::string& title, const std::string& author,
-                      const std::string& bookshare_id, const std::string& note, bool* created) {
-    int made = 0, changed = 0;
-    esp_err_t err = standby_add_many(c, {StandbyEntry{title, author, bookshare_id, note}}, &made, &changed);
-    if (created) *created = made > 0;
     return err;
 }
 

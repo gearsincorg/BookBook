@@ -162,7 +162,7 @@ $('testmic').addEventListener('click', async () => {
   say('Listening for 4 seconds after the beep…');
   try {
     const r = await api('/api/test/mic', { method: 'POST' });
-    const level = r.peak < 300 ? ' Very quiet: check the microphone wiring, or the left/right setting.' : r.peak > 30000 ? ' Signal is clipping: lower the microphone gain.' : '';
+    const level = r.peak < 300 ? ' Very quiet: check the microphone wiring, or the left/right setting.' : r.peak > 30000 ? ' Signal is clipping: the microphone is overloaded.' : '';
     say((r.heard ? 'Heard: "' + r.heard + '". ' : 'No speech recognised (' + (r.status || 'no result') + '). ') + 'Level: rms ' + r.rms + ', peak ' + r.peak + ' of 32767.' + level, r.heard ? 'ok' : 'bad');
   } catch (e) { say('Microphone test failed: ' + e.message, 'bad'); }
 });

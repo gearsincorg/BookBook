@@ -9,8 +9,9 @@
 // in exactly Bookworm's BookwormMemory format (PascalCase: ExplicitPreferences, ConversationNotes,
 // LastSessionSummary, ReadingHistory, PreferredAuthors, PreferredGenres), so both apps read and write the
 // same file. Access is a container-scoped SAS URL (Config::memory_url): the storage account key never
-// goes on the device. Writes use the blob's ETag (If-Match) for optimistic concurrency; on a conflict the
-// document is re-read and the change re-applied once.
+// goes on the device. Writes use the blob's ETag (If-Match) for optimistic concurrency; when a save fails the
+// stored copy is re-read and the change re-applied to it (up to 3 tries), which also detects a save that in fact
+// went through.
 //
 // Everything here is thread-safe. Without a memory URL every write returns ESP_ERR_INVALID_STATE.
 namespace memory {
@@ -57,17 +58,16 @@ esp_err_t remove_book(const Config& c, const std::string& title, std::string* ma
 // the model. Works without memory (then only the shelf is used).
 std::string reading_profile(const va::Shelf& shelf);
 
-// ---- Standby list: BookBook's own "save for later" list, an alternative to putting a book on the bookshelf
-// (and separate from the library's request list, which really queues the title with the library).
+// ---- The On Hold list (called "standby" in the code and in its blob, standby.json): BookBook's own "save for later"
+// list, an alternative to putting a book on the bookshelf (and separate from the library's request list, which
+// really queues the title with the library).
 // Kept in its own blob, standby.json, in the same container: Bookworm rewrites memory.json from its own
 // model and would silently drop a field it does not know, so the list must not live there. Entries are a
 // book or a series: Title, Author, BookshareId (if known), Note, DateAdded. Never listed twice (by
 // catalogue id, else exact title).
 esp_err_t standby_list(const Config& c, std::string* json);  // JSON array of the entries
-esp_err_t standby_add(const Config& c, const std::string& title, const std::string& author,
-                      const std::string& bookshare_id, const std::string& note, bool* created);
-// Several at once, in ONE save (a whole series is a dozen entries): each book is its own entry, so each can
-// be moved to the bookshelf or deleted on its own. `created` / `updated` count new and already-listed ones.
+// Adds books, several at once in ONE save (a whole series is a dozen entries): each book is its own entry, so each
+// can be moved to the bookshelf or deleted on its own. `created` / `updated` count new and already-listed ones.
 struct StandbyEntry {
     std::string title, author, bookshare_id, note;
 };
@@ -85,7 +85,7 @@ esp_err_t standby_remove(const Config& c, const std::string& title, std::string*
 esp_err_t standby_take(const Config& c, const std::string& bookshare_id, const std::string& title,
                        const std::string& entry_title, std::string* removed_title);
 
-std::string preferred_authors_json();std::string preferred_authors_json();
+std::string preferred_authors_json();
 std::string preferred_genres_json();
 esp_err_t add_author(const Config& c, const std::string& name, bool favorite);
 esp_err_t add_genre(const Config& c, const std::string& genre);

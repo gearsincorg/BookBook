@@ -21,41 +21,6 @@ static const char* TAG = "azure";
 
 namespace azure {
 
-esp_err_t probe_token(const char* region, const char* key) {
-    char url[128];
-    snprintf(url, sizeof(url), "https://%s.api.cognitive.microsoft.com/sts/v1.0/issueToken", region);
-
-    esp_http_client_config_t cfg = {};
-    cfg.url = url;
-    cfg.method = HTTP_METHOD_POST;
-    cfg.crt_bundle_attach = esp_crt_bundle_attach;
-    cfg.timeout_ms = 10000;
-    cfg.keep_alive_enable = true;
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) return ESP_FAIL;
-    esp_http_client_set_header(client, "Ocp-Apim-Subscription-Key", key);
-    esp_http_client_set_post_field(client, "", 0);
-
-    esp_err_t result = ESP_OK;
-    for (int attempt = 1; attempt <= 2; attempt++) {
-        int64_t t0 = esp_timer_get_time();
-        esp_err_t err = esp_http_client_perform(client);
-        int ms = static_cast<int>((esp_timer_get_time() - t0) / 1000);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "request %d failed: %s (%d ms)", attempt, esp_err_to_name(err), ms);
-            result = err;
-            break;
-        }
-        int status = esp_http_client_get_status_code(client);
-        ESP_LOGI(TAG, "request %d (%s): HTTP %d, %d bytes, %d ms", attempt,
-                 attempt == 1 ? "cold" : "warm/keep-alive", status,
-                 static_cast<int>(esp_http_client_get_content_length(client)), ms);
-        if (status != 200) result = ESP_FAIL;
-    }
-    esp_http_client_cleanup(client);
-    return result;
-}
-
 static void append_escaped(std::string& out, const char* text) {
     for (const char* p = text; *p; p++) {
         switch (*p) {

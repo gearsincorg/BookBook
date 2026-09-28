@@ -4,8 +4,6 @@
 
 #include "sdkconfig.h"
 
-#if CONFIG_BOOKBOOK_BOARD_XIAO_ESP32S3
-
 #include "driver/i2s_pdm.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -41,8 +39,13 @@ esp_err_t init() {
     cfg.gpio_cfg.clk = static_cast<gpio_num_t>(CONFIG_BOOKBOOK_MIC_CLK);
     cfg.gpio_cfg.din = static_cast<gpio_num_t>(CONFIG_BOOKBOOK_MIC_DAT);
     ESP_RETURN_ON_ERROR(i2s_channel_init_pdm_rx_mode(s_rx, &cfg), TAG, "init pdm rx");
-    ESP_LOGI(TAG, "PDM mic: CLK=GPIO%d DAT=GPIO%d %s slot, gain x%d", CONFIG_BOOKBOOK_MIC_CLK,
+#ifdef CONFIG_BOOKBOOK_MIC_AUTO_GAIN
+    ESP_LOGI(TAG, "PDM mic: CLK=GPIO%d DAT=GPIO%d %s slot, adaptive gain (target %d, up to x%d)", CONFIG_BOOKBOOK_MIC_CLK,
+             CONFIG_BOOKBOOK_MIC_DAT, kSlotName, CONFIG_BOOKBOOK_MIC_TARGET_PEAK, CONFIG_BOOKBOOK_MIC_MAX_GAIN);
+#else
+    ESP_LOGI(TAG, "PDM mic: CLK=GPIO%d DAT=GPIO%d %s slot, fixed gain x%d", CONFIG_BOOKBOOK_MIC_CLK,
              CONFIG_BOOKBOOK_MIC_DAT, kSlotName, CONFIG_BOOKBOOK_MIC_GAIN);
+#endif
     return ESP_OK;
 }
 
@@ -173,7 +176,7 @@ void process(std::vector<int16_t>& pcm, Stats* stats) {
              static_cast<unsigned>(pcm.size() * 1000 / kSampleRateHz), process_ms);
 }
 
-esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats, bool process_audio) {
+esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats) {
     out.clear();
     ESP_RETURN_ON_ERROR(start(), TAG, "start");
     const size_t want = static_cast<size_t>(kSampleRateHz) * ms / 1000;
@@ -185,21 +188,8 @@ esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats, bool process_a
         return err;
     }
     out.resize(want);
-    if (process_audio) process(out, stats);
+    process(out, stats);
     return ESP_OK;
 }
 
 }  // namespace mic
-
-#else  // Waveshare: ES7210 input not implemented yet
-
-namespace mic {
-esp_err_t init() { return ESP_ERR_NOT_SUPPORTED; }
-esp_err_t start() { return ESP_ERR_NOT_SUPPORTED; }
-esp_err_t read(std::vector<int16_t>&, int) { return ESP_ERR_NOT_SUPPORTED; }
-void stop() {}
-void process(std::vector<int16_t>&, Stats*) {}
-esp_err_t record(std::vector<int16_t>&, int, Stats*, bool) { return ESP_ERR_NOT_SUPPORTED; }
-}  // namespace mic
-
-#endif

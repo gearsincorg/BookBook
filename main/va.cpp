@@ -17,6 +17,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
+#include "util.h"
 
 static const char* TAG = "va";
 
@@ -65,14 +66,8 @@ bool contains_nocase(const std::string& hay, const char* needle) {
     return false;
 }
 
-struct Lock {
-    static SemaphoreHandle_t handle() {
-        static SemaphoreHandle_t h = xSemaphoreCreateRecursiveMutex();
-        return h;
-    }
-    Lock() { xSemaphoreTakeRecursive(handle(), portMAX_DELAY); }
-    ~Lock() { xSemaphoreGiveRecursive(handle()); }
-};
+struct LockTag {};
+using Lock = util::ModuleLock<LockTag>;
 
 void store_cookie(const char* set_cookie) {
     std::string c = set_cookie;
@@ -287,10 +282,7 @@ esp_err_t call_json(esp_http_client_method_t method, const std::string& path, co
     return ESP_FAIL;
 }
 
-struct JsonDeleter {
-    void operator()(cJSON* p) const { cJSON_Delete(p); }
-};
-using JsonPtr = std::unique_ptr<cJSON, JsonDeleter>;
+using util::JsonPtr;
 
 std::string trim(std::string s) {
     while (!s.empty() && isspace(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
@@ -345,8 +337,6 @@ std::string natural_author(const std::string& catalogue_name) {
     }
     return out;
 }
-
-bool logged_in() { return s_logged_in; }
 
 esp_err_t ensure_logged_in(const std::string& user, const std::string& password, std::string* error) {
     Lock lock;  // held while a login in progress finishes, then we see its result

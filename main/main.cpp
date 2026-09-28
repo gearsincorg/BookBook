@@ -1,4 +1,5 @@
-// Phase 0-2 bring-up: board IO, Wi-Fi, web setup page, Azure speech test.
+// The Librarian: start-up (board, Wi-Fi, setup page, greeting), then the push-to-talk loop. Each press is recorded,
+// transcribed (Azure), answered by the brain (Claude with library tools) and spoken (Azure).
 #include <atomic>
 #include <memory>
 
@@ -48,7 +49,7 @@ static const char kCutOffNotice[] = "I'm sorry, but I can only listen up to 30 s
 // touch made after the pad has been let go counts.
 static bool s_cancel_armed;
 static bool key_cancel() {
-    if (!board::key_pressed(board::Key::Key1)) {
+    if (!board::button_pressed()) {
         s_cancel_armed = true;
         return false;
     }
@@ -58,7 +59,7 @@ static bool key_cancel() {
 static void say(const Config& c, const std::string& text) {
     thinking::stop();  // the real answer is ready: waiting sounds end immediately
     if (c.azure_key.empty()) return;
-    s_cancel_armed = !board::key_pressed(board::Key::Key1);
+    s_cancel_armed = !board::button_pressed();
     ESP_LOGI(TAG, "say: %s", text.c_str());
     // Low red only once sound is actually coming; until then the light keeps showing what it was doing.
     azure::speak(c.azure_region.c_str(), c.azure_key.c_str(), text.c_str(), key_cancel, leds::speaking);
@@ -157,17 +158,17 @@ static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm, bool cu
         delete holder;
         thinking::stop();
         say(c, "Sorry, I ran out of memory. Please try again.");
-        return board::key_pressed(board::Key::Key1);
+        return board::button_pressed();
     }
 
     const int64_t start_ms = esp_timer_get_time() / 1000;
     bool aborted = false, timed_out = false;
     // A pad still held when the turn starts (the talk limit ended a long question) is not an abort: a touch only
     // counts once the pad has been let go and touched again.
-    bool released = !board::key_pressed(board::Key::Key1);
+    bool released = !board::button_pressed();
     while (!turn->done) {
         const int64_t waited = esp_timer_get_time() / 1000 - start_ms;
-        const bool down = board::key_pressed(board::Key::Key1);
+        const bool down = board::button_pressed();
         if (!down) released = true;
         if (waited > kAbortGuardMs && down && released) {
             aborted = true;
@@ -189,11 +190,11 @@ static bool handle_utterance(const Config& c, std::vector<int16_t>& pcm, bool cu
     if (timed_out) {
         ESP_LOGW(TAG, "turn timed out after %d ms", kTurnDeadlineMs);
         say(c, "Sorry, that took too long, so I stopped. If you were changing your lists, please ask me to check them.");
-        return board::key_pressed(board::Key::Key1);
+        return board::button_pressed();
     }
     say(c, cut_off ? std::string(kCutOffNotice) + turn->spoken : turn->spoken);
     run_pending_update(c);
-    return board::key_pressed(board::Key::Key1);
+    return board::button_pressed();
 }
 
 // Start-up preparation that only speeds up the first request, so it must not keep the member waiting: read
@@ -225,7 +226,7 @@ extern "C" void app_main() {
     Config cfg = config::get();
 
     if (board::init() != ESP_OK) {
-        ESP_LOGW(TAG, "board init incomplete (not a Waveshare audio board?); continuing");
+        ESP_LOGW(TAG, "board init incomplete; continuing");
     }
     // Microphone first: PDM receive needs I2S0 (the speaker is pinned to I2S1 either way).
     if (mic::init() != ESP_OK) ESP_LOGW(TAG, "microphone unavailable");
@@ -293,10 +294,10 @@ extern "C" void app_main() {
     std::vector<int16_t> pcm;
     pcm.reserve(static_cast<size_t>(mic::kSampleRateHz) * kMaxTalkMs / 1000);
     while (true) {
-        bool down = board::key_pressed(board::Key::Key1);
+        bool down = board::button_pressed();
         int64_t now_ms = esp_timer_get_time() / 1000;
         if (down && !was_down) {
-            ESP_LOGI(TAG, "Key1 down");
+            ESP_LOGI(TAG, "button down");
             leds::listening();  // low blue while the pad is touched
             down_since_ms = now_ms;
             talk_ended = false;
@@ -316,7 +317,7 @@ extern "C" void app_main() {
                 show_idle_state();
             }
         } else if (!down && was_down) {
-            ESP_LOGI(TAG, "Key1 up after %d ms", static_cast<int>(now_ms - down_since_ms));
+            ESP_LOGI(TAG, "button up after %d ms", static_cast<int>(now_ms - down_since_ms));
             mic::stop();
             if (ignore_release) {
                 ignore_release = false;  // this release ends a press that must not act

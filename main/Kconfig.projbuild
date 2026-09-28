@@ -1,50 +1,31 @@
 menu "BookBook"
-    choice BOOKBOOK_BOARD
-        prompt "Target board"
-        default BOOKBOOK_BOARD_WAVESHARE_AUDIO
-        help
-            Waveshare board is the real target. XIAO is a temporary development stand-in
-            (user LED on GPIO21 as a single on/off light, BOOT button on GPIO0 as Key1).
+    # Pins and parts of Phil's VA board (a Seeed XIAO ESP32-S3); see docs/hardware.md.
 
-        config BOOKBOOK_BOARD_WAVESHARE_AUDIO
-            bool "Waveshare ESP32-S3-AUDIO-Board"
-        config BOOKBOOK_BOARD_XIAO_ESP32S3
-            bool "Seeed XIAO ESP32-S3 (temporary dev stand-in)"
-    endchoice
-
-    config BOOKBOOK_XIAO_LED_COUNT
-        int "Number of WS2812 LEDs on GPIO2 (XIAO stand-in only)"
+    config BOOKBOOK_LED_COUNT
+        int "Number of WS2812 LEDs on GPIO2"
         default 12
-        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
 
     config BOOKBOOK_I2S_BCLK
-        int "MAX98357A BCLK GPIO (XIAO stand-in)"
+        int "MAX98357A BCLK GPIO"
         default 7
-        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
     config BOOKBOOK_I2S_LRC
-        int "MAX98357A LRC/WS GPIO (XIAO stand-in)"
+        int "MAX98357A LRC/WS GPIO"
         default 44
-        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
     config BOOKBOOK_I2S_DIN
-        int "MAX98357A DIN GPIO (XIAO stand-in)"
+        int "MAX98357A DIN GPIO"
         default 8
-        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
     config BOOKBOOK_I2S_SD_MODE
-        int "MAX98357A SD_MODE GPIO (XIAO stand-in)"
+        int "MAX98357A SD_MODE GPIO"
         default 9
-        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
     config BOOKBOOK_MIC_CLK
-        int "PDM microphone CLK GPIO (XIAO stand-in)"
+        int "PDM microphone CLK GPIO"
         default 1
-        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
     config BOOKBOOK_MIC_DAT
-        int "PDM microphone DAT GPIO (XIAO stand-in)"
+        int "PDM microphone DAT GPIO"
         default 3
-        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
     config BOOKBOOK_MIC_RIGHT_SLOT
         bool "Microphone SEL is tied to 3V3 (right slot); off = SEL tied to GND (left slot)"
         default n
-        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
     config BOOKBOOK_MIC_GAIN
         int "Microphone software gain (multiplier), used when adaptive gain is off"
         range 1 32
@@ -70,21 +51,18 @@ menu "BookBook"
     config BOOKBOOK_TOUCH_ENABLED
         bool "Use the capacitive touch pad as the button (off: the BOOT button is the button)"
         default y
-        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
         help
             Turn this off to run without the touch sensor at all (for example to rule it out while
             debugging); the BOOT button (GPIO0) then becomes the button.
     config BOOKBOOK_TOUCH_PIN
-        int "Capacitive touch pad GPIO, used as the button (XIAO stand-in)"
+        int "Capacitive touch pad GPIO, used as the button"
         default 6
-        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
         help
             Same pad as PhilbotSays: GPIO6 (XIAO D5). Must be a touch-capable pin (GPIO1-14 on the
             ESP32-S3; the number equals the touch channel).
     config BOOKBOOK_TOUCH_ALSO_BOOT_BUTTON
         bool "Also treat the BOOT button (GPIO0) as the button (bench fallback)"
         default n
-        depends on BOOKBOOK_BOARD_XIAO_ESP32S3
         help
             ORs the BOOT button in with the touch pad, like PhilbotSays' dev button. Off by default:
             the touch pad is the button. Never hold BOOT while powering up or resetting.
@@ -118,7 +96,7 @@ menu "BookBook"
         string "Factory default password for the setup page (user name: admin)"
         default "bookbook"
         help
-            Used until a different password is saved on the setup page. Override it in the git-ignored
+            Baked into the firmware: the setup page cannot change it. Override it in the git-ignored
             secrets/sdkconfig.secrets rather than committing a real value.
 
     config BOOKBOOK_SETUP_AP_PASSWORD
@@ -129,15 +107,15 @@ menu "BookBook"
             secrets/sdkconfig.secrets rather than committing a real value.
 
     config BOOKBOOK_WIFI_SSID
-        string "Wi-Fi SSID (development only)"
+        string "Wi-Fi SSID (default; editable on the setup page)"
         default ""
     config BOOKBOOK_WIFI_PASSWORD
-        string "Wi-Fi password (development only)"
+        string "Wi-Fi password (default; editable on the setup page)"
         default ""
     config BOOKBOOK_AZURE_SPEECH_KEY
-        string "Azure Speech key (development only)"
+        string "Azure Speech key (baked in)"
         default ""
     config BOOKBOOK_AZURE_SPEECH_REGION
-        string "Azure Speech region (development only)"
+        string "Azure Speech region (baked in)"
         default "eastus"
 endmenu

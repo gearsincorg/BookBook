@@ -2,9 +2,7 @@
 #include <string>
 #include "esp_err.h"
 
-// Device settings. Defaults come from the developer's git-ignored Kconfig secrets; anything saved
-// through the web page (stored in NVS) overrides them.
-// Settings. Split by who owns them:
+// Device settings, split by who owns them:
 //  - The member's environment (Wi-Fi, library login, volume) is saved on the device and edited on the
 //    setup page; the build's values (secrets/sdkconfig.secrets) are only the defaults for a fresh board.
 //  - Everything the program itself needs (Azure and Anthropic keys, memory storage token, setup-page

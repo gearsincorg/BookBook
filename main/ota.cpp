@@ -15,6 +15,7 @@
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "util.h"
 #include "wifi.h"
 
 static const char* TAG = "ota";
@@ -29,14 +30,7 @@ constexpr const char* kExpectKey = "expect";  // ELF sha256 of the image being i
 
 std::atomic<bool> s_install_requested{false};
 
-// The memory URL points at .../memory.json?<sas>; the same container token reaches the firmware blobs.
-std::string blob_url(const std::string& base, const char* blob) {
-    size_t q = base.find('?');
-    std::string path = base.substr(0, q);
-    std::string query = q == std::string::npos ? "" : base.substr(q);
-    size_t slash = path.rfind('/');
-    return path.substr(0, slash + 1) + blob + query;
-}
+using util::blob_url;  // the firmware blobs share the memory file's container and SAS token
 
 esp_err_t on_event(esp_http_client_event_t* e) {
     auto* body = static_cast<std::string*>(e->user_data);

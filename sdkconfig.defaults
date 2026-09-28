@@ -7,10 +7,9 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
-CONFIG_ESP_WIFI_PS_NONE=y
 CONFIG_SPIRAM_USE_MALLOC=y
 
-# 1 ms scheduler tick: the LED spinner steps every ~83 ms and a 10 ms tick made it visibly uneven.
+# 1 ms scheduler tick: the LED spinner steps every ~170 ms (12 LEDs, one lap per 2 s) and a 10 ms tick made it visibly uneven.
 CONFIG_FREERTOS_HZ=1000
 
 # TLS buffers in PSRAM. Each secure connection needs two ~16 KB buffers; with the library and Claude
@@ -25,6 +24,6 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 # deprecation #warning since we are using it deliberately.
 CONFIG_TOUCH_SUPPRESS_DEPRECATE_WARN=y
 
-# OTA: a newly installed image must call ota::mark_valid() (after a minute of running well) or the bootloader
+# OTA: a newly installed image must call ota::mark_valid() (after 30 s of running well) or the bootloader
 # goes back to the previous one on the next reset. Needs the bootloader rebuilt: flash everything once over USB.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

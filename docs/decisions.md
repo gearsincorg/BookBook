@@ -1,25 +1,37 @@
 # BookBook — Bookworm on an ESP32-S3
 
+> **Where things stand (2026-09-28).** This is the original plan and decision log from September 2026. Most of it
+> has been built; where it disagrees with the code or with [setup.md](setup.md), [hardware.md](hardware.md),
+> [memory.md](memory.md) and [conversation-rules.md](conversation-rules.md), those win. The main differences:
+>
+> - **Hardware:** the firmware runs on Phil's VA board, a Seeed XIAO ESP32-S3 (PDM microphone, MAX98357A amp,
+>   WS2812 ring, capacitive touch pad as the button, 8 MB flash). The wiring is in hardware.md.
+> - **Phases 0 to 6 are done** apart from wake word, on-device voice detection and follow-up listening (the
+>   "conversation session model" below): push-to-talk is the only input. Over-the-air updates exist, on the
+>   member's spoken request only.
+> - **Configuration:** the setup page edits only the Wi-Fi, library login and volume. The Anthropic and Azure keys,
+>   memory URL, setup-page password and practice mode are baked in at build time from `secrets/sdkconfig.secrets`
+>   (no NVS image, no flash encryption). This supersedes the "Secrets" section and decision 5.
+> - **Toolchain:** ESP-IDF 5.5, run through `tools\idf.ps1`.
+> - **Extra behaviour** beyond Bookworm is listed at the end, under "Bookworm's status".
+
 ## Goal
 
-A stand-alone, single-button Bookworm: press the button, speak, hear the reply. No PC. It mirrors the behaviour of [Bookworm](../../Bookworm/docs/decisions.md) (voice librarian for a Vision Australia Library member's account: search, bookshelf, request list, subscriptions, reading-preference memory, discovery conversation) on a Waveshare ESP32-S3-AUDIO-Board.
+A stand-alone, single-button Bookworm: press the button, speak, hear the reply. No PC. It mirrors the behaviour of [Bookworm](../../Bookworm/docs/decisions.md) (voice librarian for a Vision Australia Library member's account: search, bookshelf, request list, subscriptions, reading-preference memory, discovery conversation) on Phil's VA board.
 
 The end user is the same person Bookworm was built for: vision-impaired, single-button interaction, nothing visual to rely on. Every state must be audible.
 
-## Hardware (Waveshare ESP32-S3-AUDIO-Board)
+## Hardware (Phil's VA board)
 
-- ESP32-S3R8: dual-core 240 MHz, 512 KB SRAM, **8 MB octal PSRAM**, **16 MB flash**, Wi-Fi + BLE
-- ES7210 (4-ch ADC, mic input) with dual digital mic array; ES8311 (DAC/codec) + speaker amp, MX speaker connector
-- TCA9555 I2C GPIO expander (likely gates amp enable / buttons / LEDs — confirm from schematic v1.1)
-- 7 RGB LEDs, BOOT / RESET / one user button, microSD slot, PCF85063 RTC, battery charging
+- Seeed XIAO ESP32-S3: dual-core 240 MHz, PSRAM, 8 MB flash, Wi-Fi + BLE
+- PDM MEMS microphone, MAX98357A I2S speaker amp, a ring of 12 WS2812 LEDs, a capacitive touch pad as the one button
 - USB-C power + programming
 
-Resources: https://docs.waveshare.com/ESP32-S3-AUDIO-Board/Resources-And-Documents (schematic v1.1, demo package, ES8311/ES7210 datasheets).
-Pin maps (I2S, I2C, expander bit assignments) are **not yet captured** — they come from the schematic/demo package, not guesswork.
+The pin map is in [hardware.md](hardware.md).
 
 ## Toolchain
 
-**ESP-IDF 5.5** (installed at `C:\Users\13015\esp\v5.5\esp-idf`), C/C++. Chosen over Arduino/PlatformIO because TLS + streaming HTTP + audio codecs + PSRAM tuning are all first-class in IDF, and Espressif's `esp_codec_dev` covers ES8311/ES7210 directly.
+**ESP-IDF 5.5** (run through `tools\idf.ps1`), C/C++. Chosen over Arduino/PlatformIO because TLS + streaming HTTP + audio codecs + PSRAM tuning are all first-class in IDF.
 
 ## The big architectural fact: what does not port
 
@@ -39,10 +51,10 @@ Bookworm's Core is .NET. There is no .NET runtime for ESP32, so BookBook is a **
 ## Proposed pipeline (half-duplex, same as Bookworm)
 
 ```
-button down ─► record (ES7210, 16 kHz mono) ─► buffer in PSRAM
+button down ─► record (PDM mic, 16 kHz mono) ─► buffer in PSRAM
 button up   ─► Azure STT REST ─► transcript
             ─► Brain (Claude, tool loop; VA + memory tools)
-            ─► Azure TTS REST ─► stream/decode ─► ES8311 ─► speaker
+            ─► Azure TTS REST ─► stream/decode ─► MAX98357A ─► speaker
 ```
 
 - Half-duplex push-to-talk: no wake word, no AEC needed. Board's echo-cancel hardware is a later bonus, not a dependency.
@@ -57,7 +69,7 @@ Per Bookworm's model: the end user only supplies their own VA login; the develop
 
 | Phase | Goal |
 |---|---|
-| 0 — Bring-up | IDF project, capture pin map from schematic/demo, blink RGB LEDs, read button via TCA9555, Wi-Fi connect |
+| 0 — Bring-up | IDF project, capture the pin map, blink the LED ring, read the touch pad, Wi-Fi connect |
 | 1 — Audio loop | Record from mics → play back on speaker (echo test, mirrors Bookworm Phase 2). Confirm levels, sample rates, amp enable |
 | 2 — Speech | Azure STT + TTS over REST from the board; measure latency and accuracy on the real user's voice |
 | 3 — VA client | Login handshake, search, bookshelf, request list on-device (validate against `raw` output from Bookworm.Console) |
@@ -80,12 +92,8 @@ Per Bookworm's model: the end user only supplies their own VA login; the develop
 1. **Scope**: library management + discovery only, as Bookworm. No audiobook playback (yet).
 2. **STT/TTS**: Azure Speech REST, matching Bookworm.
 3. **Power**: USB-C mains only; **no battery operation planned**. Optimise for fastest response: no sleep modes, Wi-Fi stays associated with power save off, TLS sessions to Anthropic/Azure/VA kept warm where practical, amp/codecs left powered.
-4. **Wake word**: wanted later, not now. Push-to-talk stays the primary input. Design so it can be added: capture path must run continuously (not only while the button is held), and 16 MB flash / 8 MB PSRAM leave room for ESP-SR WakeNet (the reference project below uses it). Note the "fastest response, always powered" decision suits an always-listening wake word.
+4. **Wake word**: wanted later, not now. Push-to-talk stays the primary input. Design so it can be added: capture path must run continuously (not only while the button is held), and the PSRAM would need to hold a wake-word model such as ESP-SR WakeNet. Note the "fastest response, always powered" decision suits an always-listening wake word.
 5. **Web-based configuration is required**: Wi-Fi selection, VA login, API keys, volume, mic gain (later wake phrase), served by the device itself (SoftAP captive portal on first boot / when no Wi-Fi, plus a page on the LAN afterwards). This replaces the earlier "Wi-Fi provisioning" idea and moves earlier in the plan (needed before the device can be handed over). Secrets go to NVS, never the web page source.
-
-## Reference project
-
-https://github.com/KMX415/waveshare-ai-speaker-assistant (MIT): ESP-IDF 5.5, same board, ESP-SR WakeNet wake word, streaming STT/LLM/TTS to OpenAI, browser-based setup portal, encrypted credential storage. Different cloud backends from BookBook, but a useful model for the wake word integration, the device portal, and board audio/AEC handling. Read it before Phases 2 and 5; copy ideas, and code only with its MIT notice kept.
 
 ## Conversation session model (wake word / pause detection)
 
@@ -97,10 +105,6 @@ Owner requirement: no wake word for every request (less conversational), but no 
 - **Half-duplex**: mic ignored while the device speaks (no voice barge-in without AEC); button barge-in remains. Short guard delay after TTS ends.
 - **False-trigger control**: minimum speech duration before sending; short follow-up window.
 - **Privacy statement to keep true**: no audio leaves the device outside an active session.
-
-## Development without the board
-
-Hardware arrives in a few days. Board IO sits behind `board.h`, so networking, Azure STT/TTS (fed from WAV files), VA client, Claude loop, memory and the web config portal can be developed on any ESP32-S3. Check the spare boards' PSRAM (N16R8 / N8R2 / none) before relying on them: TLS plus audio buffers need PSRAM.
 
 ## Bookworm's status (owner, 2026-09-26)
 

@@ -2,7 +2,7 @@
 //
 // Ported from PhilbotSays (firmware/components/touch_sense/touch_sense.c), where it works well on the
 // same PCB. The logic and every constant are unchanged; only the plumbing differs: instead of a
-// present/not-present callback this exposes touch::present(), which board::key_pressed() reads, and the
+// present/not-present callback this exposes touch::present(), which board::button_pressed() reads, and the
 // optional dev pushbutton is handled in board.cpp.
 //
 // The legacy touch API (deprecated in favor of driver/touch_sens.h, but still fully functional) is used
@@ -17,8 +17,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
-
-#if CONFIG_BOOKBOOK_BOARD_XIAO_ESP32S3
 
 static const char* TAG = "touch";
 
@@ -147,12 +145,3 @@ esp_err_t start() {
 bool present() { return s_present; }
 
 }  // namespace touch
-
-#else  // Waveshare: the buttons are on the TCA9555 expander, no touch pad
-
-namespace touch {
-esp_err_t start() { return ESP_ERR_NOT_SUPPORTED; }
-bool present() { return false; }
-}  // namespace touch
-
-#endif

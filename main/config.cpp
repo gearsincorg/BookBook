@@ -56,15 +56,6 @@ void load() {
     cfg.va_password = CONFIG_BOOKBOOK_VA_PASSWORD;
     cfg.volume = CONFIG_BOOKBOOK_SPEAKER_VOLUME;
 
-    // Earlier builds also saved program settings on the device. They are baked in now, so remove the
-    // leftovers (which also clears old secrets out of flash).
-    nvs_handle_t rw;
-    if (nvs_open(kNamespace, NVS_READWRITE, &rw) == ESP_OK) {
-        for (const char* key : {"az_key", "az_region", "anth_key", "admin_pw", "mem_url", "dry_run"}) nvs_erase_key(rw, key);
-        nvs_commit(rw);
-        nvs_close(rw);
-    }
-
     nvs_handle_t h;
     if (nvs_open(kNamespace, NVS_READONLY, &h) == ESP_OK) {
         for (const auto& f : kStrFields) {

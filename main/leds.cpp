@@ -81,9 +81,6 @@ void animation_task(void*) {
             int64_t ms = esp_timer_get_time() / 1000;
             int head = static_cast<int>((ms % kSpinPeriodMs) * n / kSpinPeriodMs);
             if (s.serial != drawn || head != last_head) {
-                static int64_t last_draw_ms = 0;
-                if (last_draw_ms && ms - last_draw_ms > 200) ESP_LOGW(TAG, "spinner stalled for %d ms", static_cast<int>(ms - last_draw_ms));
-                last_draw_ms = ms;
                 draw_spinner(s, head);
                 last_head = head;
                 drawn = s.serial;

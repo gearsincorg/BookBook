@@ -4,7 +4,7 @@
 #include "esp_err.h"
 
 // Speaker output. 16 kHz, 16-bit, mono PCM (Azure's raw-16khz-16bit-mono-pcm format).
-// XIAO stand-in: MAX98357A I2S amp. Waveshare: ES8311 + NS4150B (not implemented yet).
+// Phil's VA board: MAX98357A I2S amp.
 namespace audio {
 
 constexpr int kSampleRateHz = 16000;

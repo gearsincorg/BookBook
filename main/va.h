@@ -5,8 +5,8 @@
 
 // Vision Australia Library client. Mirrors Bookworm.Core's VaLibraryClient (see Bookworm's
 // docs/va-endpoints.md): an unofficial, session-cookie JSON API behind my.visionaustralia.org.
-// Behaves like one polite human user: custom User-Agent, >= 300 ms between calls, one connection.
-// Read-only for now (login, search, bookshelf, request list). All calls are thread-safe.
+// Behaves like one polite human user: custom User-Agent, at least 500 ms between calls, one connection, and a
+// cool-off (15 min, then 1 h, then 4 h) after the site pushes back. All calls are thread-safe.
 namespace va {
 
 constexpr int kLoanCap = 20;  // books + music + braille on the bookshelf
@@ -65,7 +65,6 @@ std::string natural_author(const std::string& catalogue_name);
 // for anything that runs unattended.
 esp_err_t login(const std::string& user, const std::string& password, std::string* error = nullptr,
                 bool ignore_cooldown = false);
-bool logged_in();
 // Logs in unless this user is already logged in. Waits for a login already in progress instead of starting a
 // second one. Nothing logs in at start-up: the first request that needs the library does it.
 esp_err_t ensure_logged_in(const std::string& user, const std::string& password, std::string* error = nullptr);

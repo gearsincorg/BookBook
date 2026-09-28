@@ -4,8 +4,8 @@
 #include "esp_err.h"
 
 // Microphone input: 16 kHz, 16-bit, mono PCM (what Azure speech-to-text wants).
-// XIAO stand-in: PDM MEMS mic on I2S0 (PDM receive only works on I2S0 on the ESP32-S3, so the
-// speaker output is pinned to I2S1). Waveshare: ES7210 ADC (not implemented yet).
+// Phil's VA board: PDM MEMS mic on I2S0 (PDM receive only works on I2S0 on the ESP32-S3, so the speaker output is
+// pinned to I2S1).
 namespace mic {
 
 constexpr int kSampleRateHz = 16000;
@@ -34,9 +34,8 @@ esp_err_t read(std::vector<int16_t>& out, int timeout_ms);
 void stop();
 void process(std::vector<int16_t>& pcm, Stats* stats = nullptr);
 
-// Records `ms` milliseconds (after discarding ~150 ms of start-up noise), removes DC offset and
-// applies the configured gain. Blocks for the duration.
-// With process_audio false the samples are returned exactly as the microphone delivered them (diagnostics).
-esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats = nullptr, bool process_audio = true);
+// Records `ms` milliseconds (after discarding ~150 ms of start-up noise) and processes it as above. Blocks for
+// the duration. Used by the setup page's microphone test.
+esp_err_t record(std::vector<int16_t>& out, int ms, Stats* stats = nullptr);
 
 }  // namespace mic
