@@ -164,8 +164,8 @@ const char kSystemPrompt[] =
     "in a sentence. If they ask you to update, or to install it, call install_update EVERY time they ask: never say an "
     "update is already in progress or was already started because of something earlier in the conversation, an "
     "earlier attempt may have failed. It starts as soon as you "
-    "have finished speaking, takes less than a minute and restarts you. The device speaks its own fixed announcement "
-    "of the update, so whatever you say in that reply is not spoken: keep it to a few words. If install_update says there is nothing to "
+    "have finished speaking, takes less than a minute and restarts you, so say that in one short sentence, for "
+    "example 'Updating now. I will be back in less than a minute.' If install_update says there is nothing to "
     "install, say you are already up to date. Do not read out version strings or build times; a date is "
     "enough if they ask which version is newer.\n"
     "31. If the member asks which version of the software you are running, call get_version and say it "
@@ -861,7 +861,7 @@ std::string tool_install_update(const Config& c, bool* is_error) {
     }
     if (!info.available) return "Already up to date: there is nothing to install.";
     ota::request_install();
-    return "The update will start as soon as you have finished speaking. The device announces it itself, so reply with just a few words.";
+    return "The update will start as soon as you have finished speaking. Tell the member it takes less than a minute and you will be back after a restart.";
 }
 
 bool has_subscription(const std::vector<va::Subscription>& subs, const std::string& id) {
