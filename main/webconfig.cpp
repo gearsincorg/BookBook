@@ -130,6 +130,10 @@ static esp_err_t h_get_config(httpd_req_t* req) {
     Config c = config::get();
     cJSON* o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "wifi_ssid", c.wifi_ssid.c_str());
+    cJSON* builtin = cJSON_AddArrayToObject(o, "wifi_builtin");  // names only, never the passwords
+    for (const auto& s : c.wifi_builtin_ssid) {
+        if (!s.empty()) cJSON_AddItemToArray(builtin, cJSON_CreateString(s.c_str()));
+    }
     cJSON_AddStringToObject(o, "va_user", c.va_user.c_str());
     cJSON_AddNumberToObject(o, "volume", c.volume);
     cJSON* has = cJSON_AddObjectToObject(o, "has");  // secrets are never sent back, only whether set
@@ -186,6 +190,7 @@ static esp_err_t h_post_config(httpd_req_t* req) {
         if (v < 1 || v > 100) return send_error(req, "400 Bad Request", "Volume must be 1 to 100");
         c.volume = v;
     }
+    if (c.wifi_ssid.empty()) c.wifi_password.clear();  // no saved network: only the built-in ones are used
     if (!c.wifi_password.empty() && c.wifi_password.size() < 8) {
         return send_error(req, "400 Bad Request", "Wi-Fi password must be at least 8 characters");
     }
@@ -201,19 +206,28 @@ static esp_err_t h_post_config(httpd_req_t* req) {
     return send_json(req, o);
 }
 
+// The scan takes the radio off the setup network for a few seconds, so it runs in the background and this only
+// answers at once: /api/scan?start=1 starts one, /api/scan reports whether it is still running and what it found.
 static esp_err_t h_scan(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
-    std::vector<wifi::ScanEntry> nets;
-    if (wifi::scan(nets) != ESP_OK) return send_error(req, "503 Service Unavailable", "Scan busy, try again");
-    cJSON* arr = cJSON_CreateArray();
-    for (const auto& n : nets) {
-        cJSON* o = cJSON_CreateObject();
-        cJSON_AddStringToObject(o, "ssid", n.ssid.c_str());
-        cJSON_AddNumberToObject(o, "rssi", n.rssi);
-        cJSON_AddBoolToObject(o, "secure", n.secure);
-        cJSON_AddItemToArray(arr, o);
+    char query[16] = {};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char v[4] = {};
+        if (httpd_query_key_value(query, "start", v, sizeof(v)) == ESP_OK && v[0] == '1') wifi::scan_begin();
     }
-    return send_json(req, arr);
+    wifi::ScanResult r = wifi::scan_result();
+    cJSON* o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "running", r.running);
+    cJSON_AddBoolToObject(o, "ok", r.ok);
+    cJSON* arr = cJSON_AddArrayToObject(o, "networks");
+    for (const auto& n : r.networks) {
+        cJSON* e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "ssid", n.ssid.c_str());
+        cJSON_AddNumberToObject(e, "rssi", n.rssi);
+        cJSON_AddBoolToObject(e, "secure", n.secure);
+        cJSON_AddItemToArray(arr, e);
+    }
+    return send_json(req, o);
 }
 
 static esp_err_t h_test_speak(httpd_req_t* req) {

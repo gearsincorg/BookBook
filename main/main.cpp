@@ -31,9 +31,12 @@ static const char* TAG = "bookbook";
 static std::atomic<bool> s_update_available{false};
 static std::atomic<bool> s_update_led_dirty{false};
 
-// Ready (green) once online, otherwise still waiting (spinning yellow), for example before Wi-Fi is up.
+// Spinning purple while someone is joined to the setup network; otherwise ready (green) once online; otherwise
+// spinning cyan while the setup network is up, else still waiting (spinning yellow), for example before Wi-Fi is up.
 static void show_idle_state() {
-    if (wifi::connected()) leds::ready(s_update_available);
+    if (wifi::ap_clients() > 0) leds::setup_connected();
+    else if (wifi::connected()) leds::ready(s_update_available);
+    else if (wifi::ap_enabled()) leds::setup_network();
     else leds::waiting();
 }
 
@@ -241,14 +244,21 @@ extern "C" void app_main() {
     // Keep hands off the touch pad while powering up: it calibrates against the untouched pad (a high
     // calibration recovers by itself, see touch.cpp). Setup is reached over the normal Wi-Fi
     // (http://librarian.local/); the setup network starts by itself when Wi-Fi is missing or fails.
-    bool have_wifi = !cfg.wifi_ssid.empty();
+    // The network saved on the setup page (if any) is preferred; the two built-in ones are the fallback.
+    std::vector<wifi::Network> networks;
+    if (!cfg.wifi_ssid.empty()) networks.push_back({cfg.wifi_ssid, cfg.wifi_password});
+    const size_t preferred = networks.size();
+    for (int i = 0; i < 2; i++) {
+        if (!cfg.wifi_builtin_ssid[i].empty()) networks.push_back({cfg.wifi_builtin_ssid[i], cfg.wifi_builtin_password[i]});
+    }
+    bool have_wifi = !networks.empty();
 
     ESP_ERROR_CHECK(wifi::init());
     webconfig::start(/*trust_setup_ap=*/!have_wifi);
 
     bool online = false;
     if (have_wifi) {
-        online = wifi::start_sta(cfg.wifi_ssid.c_str(), cfg.wifi_password.c_str(), 20000) == ESP_OK;
+        online = wifi::connect(networks, preferred, 20000) == ESP_OK;
         ESP_LOGI(TAG, "wifi: %s", online ? "connected" : "failed, starting setup network");
     }
     if (!online) {
@@ -290,6 +300,9 @@ extern "C" void app_main() {
     bool talk_ended = false;
     int64_t down_since_ms = 0;
     bool last_online = wifi::connected();
+    bool last_ap = wifi::ap_enabled();
+    int last_ap_clients = 0;
+    int64_t next_client_check_ms = 0;
     bool image_confirmed = false;
     std::vector<int16_t> pcm;
     pcm.reserve(static_cast<size_t>(mic::kSampleRateHz) * kMaxTalkMs / 1000);
@@ -333,8 +346,15 @@ extern "C" void app_main() {
             ota::mark_valid();  // once only: it reads flash, and doing that 100 times a second stalled the CPU during speech
             image_confirmed = true;
         }
-        if (!down && wifi::connected() != last_online) {
+        int ap_clients = last_ap_clients;
+        if (now_ms >= next_client_check_ms) {  // twice a second is plenty
+            ap_clients = wifi::ap_clients();
+            next_client_check_ms = now_ms + 500;
+        }
+        if (!down && (wifi::connected() != last_online || wifi::ap_enabled() != last_ap || (ap_clients > 0) != (last_ap_clients > 0))) {
             last_online = wifi::connected();
+            last_ap = wifi::ap_enabled();
+            last_ap_clients = ap_clients;
             show_idle_state();
         }
         vTaskDelay(pdMS_TO_TICKS(10));

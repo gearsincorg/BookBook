@@ -52,7 +52,8 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
       <label for="netpick">Networks found <span class="hint">(choosing one fills in the network name below)</span></label>
       <select id="netpick"></select>
     </div>
-    <label for="wifi_ssid">Network name (SSID) <span class="hint">(type it here if it is hidden)</span></label>
+    <p class="info" id="builtin"></p>
+    <label for="wifi_ssid">Network name (SSID) <span class="hint">(type it here if it is hidden; leave it empty to use only the built-in networks)</span></label>
     <input id="wifi_ssid" name="wifi_ssid" maxlength="32" autocapitalize="off" spellcheck="false">
     <label for="wifi_password">Wi-Fi password <span class="hint" id="h_wifi_pass"></span></label>
     <input id="wifi_password" name="wifi_password" maxlength="63" autocapitalize="off" spellcheck="false" autocomplete="new-password">
@@ -113,6 +114,7 @@ async function load() {
   $('wifi_ssid').value = c.wifi_ssid; $('va_user').value = c.va_user;
   $('volume').value = toSlider(c.volume); $('volout').textContent = $('volume').value;
   hint('h_wifi_pass', c.has.wifi_password); hint('h_va_pass', c.has.va_password);
+  $('builtin').textContent = c.wifi_builtin.length ? 'Built-in networks, always tried as a fallback: ' + c.wifi_builtin.join(', ') + '.' : '';
   $('info').textContent = 'Device ' + c.mac + (c.ip ? ' on your network at ' + c.ip : ' (not on your network yet)') +
     (c.ap ? '. Setup network: ' + c.ap : '') + '.';
 }
@@ -124,7 +126,20 @@ $('netpick').addEventListener('change', e => { if (e.target.value) { $('wifi_ssi
 $('scan').addEventListener('click', async () => {
   say('Scanning…');
   try {
-    const list = await api('/api/scan');
+    // The scan runs on the device for a few seconds and can interrupt this connection, so start it, then ask for the
+    // result until it is ready, riding out a request or two that fail meanwhile.
+    try { await api('/api/scan?start=1'); } catch (e) {}
+    let res = null, failures = 0;
+    for (let i = 0; i < 30 && !res; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        const r = await api('/api/scan');
+        if (!r.running) res = r;
+      } catch (e) { if (++failures > 12) throw e; }
+    }
+    if (!res) throw new Error('timed out, try again');
+    if (!res.ok) throw new Error('the device could not scan, try again');
+    const list = res.networks;
     const pick = $('netpick');
     pick.innerHTML = '';
     const first = document.createElement('option'); first.value = ''; first.textContent = 'Choose a network…'; pick.appendChild(first);

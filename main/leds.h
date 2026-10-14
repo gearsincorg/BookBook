@@ -4,7 +4,9 @@
 //
 //   boot          red, green, blue, then spinning yellow
 //   waiting()     spinning yellow  : starting up, not online yet
-//   ready()       low green        : ready for touch-to-talk (one low-yellow LED among them if an update is available)
+//   setup_network() spinning cyan  : not online, and the Librarian-XXXX setup network is up
+//   setup_connected() spinning purple : someone has joined the setup network
+//   ready()       low green      : ready for touch-to-talk (one low-yellow LED among them if an update is available)
 //   listening()   low blue         : the pad is touched, recording
 //   thinking()    spinning blue    : released, waiting for the answer
 //   speaking()    low red          : something is being spoken (the intro, or an answer)
@@ -18,6 +20,8 @@ void start();          // start the animation task (after board::init())
 void boot_sequence();  // red, green, blue (blocking, about 1.2 s), then waiting()
 
 void waiting();
+void setup_network();
+void setup_connected();
 void ready(bool update_available = false);
 void listening();
 void thinking();

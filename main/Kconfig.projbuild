@@ -107,10 +107,19 @@ menu "BookBook"
             secrets/sdkconfig.secrets rather than committing a real value.
 
     config BOOKBOOK_WIFI_SSID
-        string "Wi-Fi SSID (default; editable on the setup page)"
+        string "Built-in Wi-Fi network 1: SSID"
         default ""
+        help
+            The device scans at start-up and joins whichever built-in network it can see (strongest first).
+            A network saved on the setup page is tried before these.
     config BOOKBOOK_WIFI_PASSWORD
-        string "Wi-Fi password (default; editable on the setup page)"
+        string "Built-in Wi-Fi network 1: password"
+        default ""
+    config BOOKBOOK_WIFI_SSID2
+        string "Built-in Wi-Fi network 2: SSID (optional)"
+        default ""
+    config BOOKBOOK_WIFI_PASSWORD2
+        string "Built-in Wi-Fi network 2: password"
         default ""
     config BOOKBOOK_AZURE_SPEECH_KEY
         string "Azure Speech key (baked in)"

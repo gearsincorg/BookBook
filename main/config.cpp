@@ -49,9 +49,12 @@ void load() {
 #else
     cfg.dry_run = false;
 #endif
-    // The member's environment: build defaults for a fresh board, overridden by what was saved.
-    cfg.wifi_ssid = CONFIG_BOOKBOOK_WIFI_SSID;
-    cfg.wifi_password = CONFIG_BOOKBOOK_WIFI_PASSWORD;
+    // Wi-Fi: two built-in networks, plus the one saved on the setup page (empty until then), which is tried first.
+    cfg.wifi_builtin_ssid[0] = CONFIG_BOOKBOOK_WIFI_SSID;
+    cfg.wifi_builtin_password[0] = CONFIG_BOOKBOOK_WIFI_PASSWORD;
+    cfg.wifi_builtin_ssid[1] = CONFIG_BOOKBOOK_WIFI_SSID2;
+    cfg.wifi_builtin_password[1] = CONFIG_BOOKBOOK_WIFI_PASSWORD2;
+    // The rest of the member's environment: build defaults for a fresh board, overridden by what was saved.
     cfg.va_user = CONFIG_BOOKBOOK_VA_USER;
     cfg.va_password = CONFIG_BOOKBOOK_VA_PASSWORD;
     cfg.volume = CONFIG_BOOKBOOK_SPEAKER_VOLUME;

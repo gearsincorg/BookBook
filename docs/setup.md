@@ -4,7 +4,7 @@ All settings are entered on a web page served by the device itself. They are sto
 
 ## First-time setup (no Wi-Fi saved yet)
 
-1. Power the device. After the start-up light sequence it stays on **spinning yellow** (still waiting, because it has no Wi-Fi to join): it is running its own Wi-Fi network.
+1. Power the device. After the start-up light sequence it stays on **spinning cyan** (it has no Wi-Fi to join, so it is running its own Wi-Fi network).
 2. On a phone or PC, join the Wi-Fi network **Librarian-XXXX** (XXXX = the last four characters of the device's MAC address). Password: the value of `CONFIG_BOOKBOOK_SETUP_AP_PASSWORD` (default `bookbook1`; override it in your git-ignored `secrets/sdkconfig.secrets`).
 3. A setup page should open automatically. If not, browse to **http://192.168.4.1/**.
 4. Press **Scan for networks**, pick your Wi-Fi, enter its password, enter the library login, and press **Save**, then **Restart device**.
@@ -25,7 +25,9 @@ once every two seconds with a fading 3-LED tail, and it always means the device 
 
 | LEDs | Meaning |
 |---|---|
-| red, green, blue, then spinning yellow | starting up (and still spinning yellow while it is not online). The intro is spoken in low red, then it turns green |
+| red, green, blue, then spinning yellow | starting up, and looking for a Wi-Fi network (it stays yellow while it is not online). The intro is spoken in low red, then it turns green |
+| spinning cyan | no Wi-Fi network could be joined, and the Librarian-XXXX setup network is open (it keeps looking in the background, and turns green when it gets online) |
+| spinning purple | someone has joined the Librarian-XXXX setup network (it takes priority over the other idle lights while they are connected) |
 | low green | ready for touch-to-talk |
 | low blue | the pad is touched: it is listening |
 | spinning blue | you let go: waiting for the answer |
@@ -49,7 +51,13 @@ Do **not** hold BOOT while powering up or resetting the board: it is a strapping
 
 ## If Wi-Fi fails
 
-If the saved network cannot be joined within 20 seconds, the device also starts the Librarian-XXXX network (still retrying your Wi-Fi in the background). In this case the admin password **is** required.
+If none of the networks can be joined within about 20 seconds, the device also starts the Librarian-XXXX network (spinning cyan), and keeps looking for a network in the background. In this case the admin password **is** required.
+
+## Moving between two Wi-Fi networks
+
+Two networks can be built in (`CONFIG_BOOKBOOK_WIFI_SSID` / `_PASSWORD` and `CONFIG_BOOKBOOK_WIFI_SSID2` / `_PASSWORD2` in `secrets/sdkconfig.secrets`). At start-up, and again whenever it loses a network for good, the device scans and joins whichever of its networks it can see (the strongest first); a network that refuses it, or that is hidden and so not in the scan, is handled too. While someone is using the setup network it does not scan, because that would cut them off.
+
+A network saved on the setup page is tried **first** whenever it is visible, and the two built-in networks stay as the fallback. So to give one of the built-in networks a new password, save that network's name with the new password on the page; if the new password is ever wrong, the built-in one is still tried. Clear the network name on the page and save to go back to the built-in networks alone.
 
 ## Known limitations
 
@@ -58,7 +66,7 @@ If the saved network cannot be joined within 20 seconds, the device also starts 
 
 ## What is editable and what is baked in
 
-The Librarian is a single-user device, so the setup page only edits the member's **environment**: the Wi-Fi network name and password, the library login, and the speaker volume. These are saved on the device; the values in `secrets/sdkconfig.secrets` are only the defaults for a freshly flashed board, and anything saved on the page wins.
+The Librarian is a single-user device, so the setup page only edits the member's **environment**: one extra Wi-Fi network name and password, the library login, and the speaker volume. These are saved on the device; the library login and volume values in `secrets/sdkconfig.secrets` are only the defaults for a freshly flashed board, and anything saved on the page wins. The two built-in Wi-Fi networks are baked in (see above).
 
 Everything the program itself needs is **baked into the firmware at build time** from the git-ignored `secrets/sdkconfig.secrets`, and cannot be changed on the device: `CONFIG_BOOKBOOK_AZURE_SPEECH_KEY` / `_REGION`, `CONFIG_BOOKBOOK_ANTHROPIC_KEY`, `CONFIG_BOOKBOOK_MEMORY_URL` (a container-scoped SAS URL: the storage account key never goes on the device), `CONFIG_BOOKBOOK_ADMIN_PASSWORD`, `CONFIG_BOOKBOOK_SETUP_AP_PASSWORD` and `CONFIG_BOOKBOOK_PRACTICE_MODE` (pretend to add/remove books). Change one by editing that file, clearing the generated `sdkconfig`, and reflashing. Older builds saved some of these on the device; they are erased from its saved settings at start-up.
 

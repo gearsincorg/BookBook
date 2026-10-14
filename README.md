@@ -25,8 +25,10 @@ Secrets and per-board defaults live in `secrets/sdkconfig.secrets` (gitignored; 
 
     CONFIG_BOOKBOOK_WIFI_SSID="..."
     CONFIG_BOOKBOOK_WIFI_PASSWORD="..."
+    CONFIG_BOOKBOOK_WIFI_SSID2="..."
+    CONFIG_BOOKBOOK_WIFI_PASSWORD2="..."
 
-The setup page then edits only the Wi-Fi, library login and volume; the keys are baked in at build time.
+Those are two built-in networks (the second is optional); the device joins whichever it can see. The setup page then edits only one extra Wi-Fi network (tried first), the library login and volume; the keys are baked in at build time.
 
 ## Releasing
 

@@ -16,6 +16,8 @@ struct Colour {
 };
 constexpr Colour kYellowBright = {120, 80, 0};
 constexpr Colour kBlueBright = {0, 0, 130};
+constexpr Colour kCyanBright = {0, 100, 110};
+constexpr Colour kPurple = {70, 0, 100};
 constexpr Colour kGreenLow = {0, 18, 0};
 constexpr Colour kBlueLow = {0, 0, 22};
 constexpr Colour kRedLow = {24, 0, 0};
@@ -124,6 +126,8 @@ void boot_sequence() {
 }
 
 void waiting() { set(Mode::Spin, kYellowBright, "spinning yellow: waiting"); }
+void setup_network() { set(Mode::Spin, kCyanBright, "spinning cyan: setup network is up"); }
+void setup_connected() { set(Mode::Spin, kPurple, "spinning purple: someone is on the setup network"); }
 void ready(bool update_available) {
     set(Mode::Solid, kGreenLow, update_available ? "green with one yellow LED: ready, update available" : "green: ready for touch-to-talk",
         update_available);
