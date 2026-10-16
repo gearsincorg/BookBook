@@ -170,6 +170,12 @@ $('f').addEventListener('submit', async ev => {
   try {
     const r = await api('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     say('Saved.' + (r.restart_needed ? ' Restart the device to use the new Wi-Fi or password.' : ''), 'ok');
+    if (r.restart_needed) {  // the restart button is at the bottom of the page: offer one right by the message
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'secondary'; b.textContent = 'Restart now';
+      b.addEventListener('click', restart);
+      $('status').append(' ', b);
+    }
     ['wifi_password','va_password'].forEach(k => $(k).value = '');
     load();
   } catch (e) { say('Save failed: ' + e.message, 'bad'); }
@@ -196,10 +202,11 @@ $('testva').addEventListener('click', async () => {
   catch (e) { say(e.message, 'bad'); }
 });
 
-$('reboot').addEventListener('click', async () => {
+async function restart() {
   say('Restarting… this page will stop responding for a few seconds.');
   try { await api('/api/reboot', { method: 'POST' }); } catch (e) {}
-});
+}
+$('reboot').addEventListener('click', restart);
 
 load().catch(e => say('Could not load settings: ' + e.message, 'bad'));
 </script>
