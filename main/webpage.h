@@ -47,13 +47,13 @@ static const char kIndexHtml[] = R"HTML(<!doctype html>
 <form id="f" autocomplete="off">
   <fieldset>
     <legend>Wi-Fi</legend>
+    <div id="known" hidden><strong>Known networks</strong><ul class="info" id="knownlist"></ul></div>
     <button type="button" class="secondary" id="scan">Scan for networks</button>
     <div id="netbox" hidden>
       <label for="netpick">Networks found <span class="hint">(choosing one fills in the network name below)</span></label>
       <select id="netpick"></select>
     </div>
-    <p class="info" id="builtin"></p>
-    <label for="wifi_ssid">Network name (SSID) <span class="hint">(type it here if it is hidden; leave it empty to use only the built-in networks)</span></label>
+    <label for="wifi_ssid">Network name (SSID) <span class="hint">(leave it empty to use only the built-in networks)</span></label>
     <input id="wifi_ssid" name="wifi_ssid" maxlength="32" autocapitalize="off" spellcheck="false">
     <label for="wifi_password">Wi-Fi password <span class="hint" id="h_wifi_pass"></span></label>
     <input id="wifi_password" name="wifi_password" maxlength="63" autocapitalize="off" spellcheck="false" autocomplete="new-password">
@@ -114,7 +114,15 @@ async function load() {
   $('wifi_ssid').value = c.wifi_ssid; $('va_user').value = c.va_user;
   $('volume').value = toSlider(c.volume); $('volout').textContent = $('volume').value;
   hint('h_wifi_pass', c.has.wifi_password); hint('h_va_pass', c.has.va_password);
-  $('builtin').textContent = c.wifi_builtin.length ? 'Built-in networks, always tried as a fallback: ' + c.wifi_builtin.join(', ') + '.' : '';
+  // Every network the device tries: the one saved here (first, when it is in range), then the built-in ones.
+  const known = (c.wifi_ssid ? [[c.wifi_ssid, 'saved on this page, tried first']] : [])
+    .concat(c.wifi_builtin.map(s => [s, 'built in']));
+  $('knownlist').replaceChildren(...known.map(([s, what]) => {
+    const li = document.createElement('li');
+    li.textContent = s + ' (' + what + (s === c.wifi_now ? ', connected now' : '') + ')';
+    return li;
+  }));
+  $('known').hidden = !known.length;
   $('info').textContent = 'Device ' + c.mac + (c.ip ? ' on your network at ' + c.ip : ' (not on your network yet)') +
     (c.ap ? '. Setup network: ' + c.ap : '') + '.';
 }

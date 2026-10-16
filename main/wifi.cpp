@@ -207,7 +207,9 @@ static std::vector<size_t> try_order(const std::vector<wifi::ScanEntry>& seen, b
     return order;
 }
 
-// Scans, then joins the first network that works, within budget_ms. True if online afterwards.
+// Scans, then joins the first network that works, within budget_ms. True if online afterwards. The networks are
+// tried in turn until the budget is spent: a router can drop a join just after accepting it (reason 1) and take
+// the next one fine, so one refusal is not the end of a network.
 static bool select_and_join(int budget_ms) {
     const int64_t deadline = now_ms() + budget_ms;
     RadioLock lock(budget_ms);
@@ -217,12 +219,16 @@ static bool select_and_join(int budget_ms) {
     std::vector<wifi::ScanEntry> seen;
     bool scanned = scan_locked(seen) == ESP_OK && !seen.empty();
     ESP_LOGI(TAG, "scan %s, %d networks seen", scanned ? "ok" : "gave nothing", static_cast<int>(seen.size()));
-    for (size_t i : try_order(seen, scanned)) {
-        const int64_t left = deadline - now_ms();
-        if (left < 1500) break;
-        if (try_join(s_nets[i], static_cast<int>(std::min<int64_t>(left, kJoinMs)))) {
-            ESP_LOGI(TAG, "joined \"%s\"", s_nets[i].ssid.c_str());
-            return true;
+    const std::vector<size_t> order = try_order(seen, scanned);
+    for (int round = 0; deadline - now_ms() >= 1500; round++) {
+        if (round > 0) vTaskDelay(pdMS_TO_TICKS(1000));  // a moment for the router before trying again
+        for (size_t i : order) {
+            const int64_t left = deadline - now_ms();
+            if (left < 1500) break;
+            if (try_join(s_nets[i], static_cast<int>(std::min<int64_t>(left, kJoinMs)))) {
+                ESP_LOGI(TAG, "joined \"%s\"", s_nets[i].ssid.c_str());
+                return true;
+            }
         }
     }
     return false;
@@ -351,6 +357,12 @@ std::string ip() {
     char buf[16];
     snprintf(buf, sizeof(buf), IPSTR, IP2STR(&info.ip));
     return buf;
+}
+
+std::string ssid() {
+    wifi_ap_record_t ap = {};
+    if (!connected() || esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return "";
+    return std::string(reinterpret_cast<const char*>(ap.ssid));
 }
 
 std::string ap_ssid() { return s_ap_enabled ? s_ap_ssid : ""; }

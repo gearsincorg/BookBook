@@ -224,6 +224,32 @@ static void warmup_task(void* arg) {
     vTaskDelete(nullptr);
 }
 
+// The first time Wi-Fi is up: set the clock, say hello, and warm up in the background. Usually during start-up,
+// but also later if the first join failed and the background search found a network afterwards.
+static void on_first_online(const Config& cfg) {
+    ESP_LOGI(TAG, "time sync: %s", esp_err_to_name(wifi::sync_time(15000)));
+    ESP_LOGI(TAG, "setup page: http://%s/ or http://librarian.local/", wifi::ip().c_str());
+    // After an update the restart is the only place the result is known: say it before the greeting.
+    std::string intro = "Hi! I'm Marian, your librarian. When the lights are green, just touch and hold to talk to me.";
+    switch (ota::take_boot_report()) {
+        case ota::BootReport::Updated:
+            intro = "The update is complete. " + intro;
+            break;
+        case ota::BootReport::RolledBack:
+            intro = "The update did not work, so I have gone back to my previous version. " + intro;
+            break;
+        case ota::BootReport::None:
+            break;
+    }
+    if (!cfg.azure_key.empty()) {
+        // low red once the intro is audible, like any spoken answer
+        azure::speak(cfg.azure_region.c_str(), cfg.azure_key.c_str(), intro.c_str(), nullptr, leds::speaking);
+    }
+    // Memory loading prepares the first request; it runs in the background so the LEDs go
+    // green (ready for press-to-talk) as soon as the greeting has finished.
+    xTaskCreate(warmup_task, "warmup", 12288, const_cast<Config*>(&cfg), 4, nullptr);
+}
+
 extern "C" void app_main() {
     config::load();
     Config cfg = config::get();
@@ -261,33 +287,18 @@ extern "C" void app_main() {
         online = wifi::connect(networks, preferred, 20000) == ESP_OK;
         ESP_LOGI(TAG, "wifi: %s", online ? "connected" : "failed, starting setup network");
     }
+    // The setup network opened here exists only because Wi-Fi is down: it closes once Wi-Fi works (below).
+    bool auto_ap = false;
     if (!online) {
         wifi::enable_ap();
         webconfig::start_captive_dns();
+        auto_ap = true;
     }
 
+    bool greeted = false;
     if (online) {
-        ESP_LOGI(TAG, "time sync: %s", esp_err_to_name(wifi::sync_time(15000)));
-        ESP_LOGI(TAG, "setup page: http://%s/ or http://librarian.local/", wifi::ip().c_str());
-        // After an update the restart is the only place the result is known: say it before the greeting.
-        std::string intro = "Hi! I'm Marian, your librarian. When the lights are green, just press and hold to talk to me.";
-        switch (ota::take_boot_report()) {
-            case ota::BootReport::Updated:
-                intro = "The update is complete. " + intro;
-                break;
-            case ota::BootReport::RolledBack:
-                intro = "The update did not work, so I have gone back to my previous version. " + intro;
-                break;
-            case ota::BootReport::None:
-                break;
-        }
-        if (!cfg.azure_key.empty()) {
-            // low red once the intro is audible, like any spoken answer
-            azure::speak(cfg.azure_region.c_str(), cfg.azure_key.c_str(), intro.c_str(), nullptr, leds::speaking);
-        }
-        // Memory loading prepares the first request; it runs in the background so the LEDs go
-        // green (ready for press-to-talk) as soon as the greeting has finished.
-        xTaskCreate(warmup_task, "warmup", 12288, &cfg, 4, nullptr);
+        on_first_online(cfg);
+        greeted = true;
     }
     show_idle_state();
     ESP_LOGI(TAG, "ready: press-to-talk is available");
@@ -350,6 +361,18 @@ extern "C" void app_main() {
         if (now_ms >= next_client_check_ms) {  // twice a second is plenty
             ap_clients = wifi::ap_clients();
             next_client_check_ms = now_ms + 500;
+        }
+        if (!down && auto_ap && ap_clients == 0 && wifi::connected()) {  // no longer needed, and nobody is on it
+            ESP_LOGI(TAG, "wifi works now: closing the setup network");
+            webconfig::stop_captive_dns();
+            wifi::disable_ap();
+            auto_ap = false;
+        }
+        if (!down && !greeted && wifi::connected()) {  // the first join failed, the background search succeeded
+            ESP_LOGI(TAG, "wifi: connected after start-up");
+            greeted = true;
+            on_first_online(cfg);
+            show_idle_state();
         }
         if (!down && (wifi::connected() != last_online || wifi::ap_enabled() != last_ap || (ap_clients > 0) != (last_ap_clients > 0))) {
             last_online = wifi::connected();

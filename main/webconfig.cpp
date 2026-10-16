@@ -141,6 +141,7 @@ static esp_err_t h_get_config(httpd_req_t* req) {
     cJSON_AddBoolToObject(has, "va_password", !c.va_password.empty());
     cJSON_AddStringToObject(o, "mac", mac_string().c_str());
     cJSON_AddStringToObject(o, "ip", wifi::ip().c_str());
+    cJSON_AddStringToObject(o, "wifi_now", wifi::ssid().c_str());
     cJSON_AddStringToObject(o, "ap", wifi::ap_ssid().c_str());
     return send_json(req, o);
 }

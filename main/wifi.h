@@ -35,6 +35,7 @@ int ap_clients();  // devices (phones, PCs) currently joined to the setup networ
 
 bool connected();
 std::string ip();       // station IPv4, empty if not connected
+std::string ssid();     // the network the station is on, empty if not connected
 std::string ap_ssid();  // setup AP name, empty if not enabled
 
 // Blocking scan. Pauses the station's reconnecting while it runs (a connect attempt in progress makes the driver
